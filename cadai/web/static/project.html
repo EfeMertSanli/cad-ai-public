@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Project">cad-ai · Proje</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+</head>
+<body>
+<main>
+  <p><a href="/" data-en="← Projects">← Projeler</a></p>
+  <h1 id="title">…</h1>
+
+  <h2 data-en="Files">Dosyalar</h2>
+  <div class="table-wrap"><table>
+    <thead><tr><th data-en="File">Dosya</th><th data-en="Role">Rol</th><th data-en="Size">Boyut</th><th data-en="Scene">Sahne</th></tr></thead>
+    <tbody id="files"></tbody>
+  </table></div>
+
+  <div id="pairs"></div>
+</main>
+<script>
+header("");
+const pid = location.pathname.split("/").pop();
+const ROLE = {final: T("son", "final"), raw: T("ham", "raw"), draft: T("taslak", "draft")};
+
+function sceneCell(s) {
+  if (!s) return pill(T("dönüştürülmedi", "not converted"));
+  if (!s.ok) return el("span", {}, pill(T("hata", "error"), "bad"), " ", el("span", {class: "muted"}, L(s.error)));
+  return el("span", {}, pill(T("hazır", "ready"), "ok"),
+    T(` ${s.items.toLocaleString("tr")} nesne · birim ${s.unit.unit} · ${fmtSeconds(s.seconds)}`,
+      ` ${s.items.toLocaleString("en")} items · unit ${s.unit.unit} · ${fmtSeconds(s.seconds)}`));
+}
+
+function pairBlock(pair, files) {
+  const name = sha => (files.find(f => f.sha === sha) || {}).name || "?";
+  const lab = pair.label_full;
+  const box = el("div", {class: "card", style: "margin-top:12px"},
+    el("div", {}, el("b", {}, T("Çift: ", "Pair: ")), `${name(pair.raw)} → ${name(pair.final)}`),
+    el("div", {class: "sub"}, L(pair.why)));
+  if (!lab) { box.append(el("div", {class: "sub"}, pill(T("etiketlenmedi", "not labelled")))); return box; }
+  if (lab.error) { box.append(el("pre", {}, lab.trace || L(lab.error))); return box; }
+  const c = lab.counts || {};
+  box.append(
+    el("div", {class: "row", style: "margin:8px 0"},
+      pill(T(`kaldı ${c.keep}`, `kept ${c.keep}`)), pill(T(`silindi ${c.delete}`, `deleted ${c.delete}`)),
+      pill(T(`görünüş dışı ${c.out_of_view}`, `outside views ${c.out_of_view}`)),
+      pill(T(`belirsiz ${c.partial}`, `uncertain ${c.partial}`)), pill(T(`çakışan ${c.shadowed}`, `overlapping ${c.shadowed}`)),
+      pill(T(`${lab.transforms.length} görünüş`, `${lab.transforms.length} views`), lab.ok ? "ok" : "bad")),
+    el("div", {class: "legend"},
+      el("span", {}, el("i", {style: "background:#3c3c3c"}), T("kaldı", "kept")),
+      el("span", {}, el("i", {style: "background:#dc2828"}), T("silindi", "deleted")),
+      el("span", {}, el("i", {style: "background:#f0a000"}), T("belirsiz", "uncertain")),
+      el("span", {}, el("i", {style: "background:#bebed2"}), T("görünüş dışı", "outside views"))),
+    lab.ok ? el("img", {class: "preview", src: `/api/projects/${pid}/labels/${pair.final}.png?${lab.seconds}`}) : null,
+    el("details", {}, el("summary", {}, T("Hizalama günlüğü", "Alignment log")), el("pre", {}, (lab.log || []).map(L).join("\n")),
+      el("pre", {}, JSON.stringify(lab.transforms, null, 1))));
+  return box;
+}
+
+async function load() {
+  const p = await api(`/api/projects/${pid}`);
+  document.getElementById("title").textContent = p.folder;
+  document.title = `cad-ai · ${p.folder}`;
+  document.getElementById("files").replaceChildren(...p.files.map(f => el("tr", {},
+    el("td", {}, f.name), el("td", {}, ROLE[f.role] || f.role), el("td", {}, `${(f.size / 1e6).toFixed(1)} MB`),
+    el("td", {}, sceneCell(f.scene)))));
+  document.getElementById("pairs").replaceChildren(el("h2", {}, T("Temizlik etiketleri", "Cleanup labels")),
+    ...(p.pairs.length ? p.pairs.map(x => pairBlock(x, p.files)) : [el("div", {class: "muted"}, T("Son çizim yok.", "No final drawing."))]));
+}
+load();
+</script>
+</body>
+</html>

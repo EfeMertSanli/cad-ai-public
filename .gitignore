@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.dxf
+*.dwg
+*.npz
+*.png
+
+# the anonymised demo projects are published on purpose (ADR-032); every other drawing stays out
+!demo/**/*.dwg
+!demo/**/*.png

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cad-ai · Debug</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+</head>
+<body>
+<main>
+  <h1 data-en="Debug panel">Debug paneli</h1>
+  <div class="tabs" id="tabs"></div>
+
+  <section data-tab="jobs">
+    <div class="table-wrap"><table>
+      <thead><tr><th data-en="Job">İş</th><th data-en="Status">Durum</th><th data-en="Progress">İlerleme</th>
+        <th data-en="Time">Süre</th><th data-en="Started">Başladı</th><th></th></tr></thead>
+      <tbody id="jobs"></tbody>
+    </table></div>
+    <h2 id="jobtitle" data-en="Job details">İş ayrıntısı</h2>
+    <div id="jobdetail" class="muted" data-en="Click a job.">Bir işe tıklayın.</div>
+  </section>
+
+  <section data-tab="logs" hidden>
+    <div class="row" style="margin-bottom:8px">
+      <select id="level" onchange="loadLogs()"><option>INFO</option><option>WARNING</option><option>ERROR</option></select>
+      <label><input type="checkbox" id="follow" checked> <span data-en="live">canlı</span></label>
+    </div>
+    <div class="log" id="logs" style="height:60vh"></div>
+  </section>
+
+  <section data-tab="failures" hidden>
+    <div id="failures" class="muted" data-en="Loading…">Yükleniyor…</div>
+  </section>
+
+  <section data-tab="models" hidden>
+    <div id="models" class="muted" data-en="No models yet.">Henüz model yok.</div>
+  </section>
+
+  <section data-tab="system" hidden>
+    <div class="grid" id="sys"></div>
+    <h2 data-en="Paths and settings">Yollar ve ayarlar</h2>
+    <pre id="sysraw"></pre>
+  </section>
+</main>
+<script>
+header("/debug");
+const TABS = [["jobs", T("İşler", "Jobs")], ["logs", T("Günlük", "Log")], ["failures", T("Hatalar", "Failures")],
+              ["models", T("Modeller", "Models")], ["system", T("Sistem", "System")]];
+let tab = "jobs", selectedJob = null;
+
+function showTab(name) {
+  tab = name;
+  document.querySelectorAll("section[data-tab]").forEach(s => s.hidden = s.dataset.tab !== name);
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  refresh();
+}
+document.getElementById("tabs").replaceChildren(...TABS.map(([k, t]) =>
+  el("button", {"data-tab": k, onclick: () => showTab(k)}, t)));
+
+async function loadJobs() {
+  const jobs = await api("/api/jobs");
+  if (!selectedJob && location.hash.length > 1 && !location.hash.startsWith("#model-")) selectedJob = location.hash.slice(1);
+  document.getElementById("jobs").replaceChildren(...jobs.map(j => {
+    const [st, kind] = STATUS_PILL[j.status] || [j.status, ""];
+    const done = j.total ? Math.round(100 * j.done / j.total) : 0;
+    return el("tr", {style: "cursor:pointer" + (j.id === selectedJob ? ";background:#eef3fd" : ""),
+                     onclick: () => { selectedJob = j.id; loadJobs(); }},
+      el("td", {}, L(j.title)), el("td", {}, pill(st, kind)),
+      el("td", {}, j.total ? `${j.done}/${j.total}` : "", j.total ? el("div", {class: "bar"}, el("div", {style: `width:${done}%`})) : null),
+      el("td", {}, fmtSeconds(j.seconds)), el("td", {class: "muted"}, j.created.replace("T", " ")),
+      el("td", {}, ["queued", "running"].includes(j.status)
+        ? el("button", {onclick: e => { e.stopPropagation(); api(`/api/jobs/${j.id}/cancel`, {method: "POST"}); }}, T("İptal", "Cancel")) : null));
+  }));
+  const j = jobs.find(x => x.id === selectedJob);
+  const box = document.getElementById("jobdetail");
+  if (!j) return;
+  document.getElementById("jobtitle").textContent = T(`İş ayrıntısı · ${L(j.title)} (${j.id})`, `Job details · ${L(j.title)} (${j.id})`);
+  const logBox = el("div", {class: "log"}, j.lines.map(l => typeof l === "string" ? l : `${l.t} ${L(l)}`).join("\n"));
+  box.replaceChildren(
+    el("div", {class: "muted"}, T("Parametreler: ", "Parameters: ") + JSON.stringify(j.params)),
+    logBox,
+    j.error ? el("div", {}, el("h2", {}, T("Hata", "Error")), el("pre", {}, j.error)) : null,
+    j.result ? el("div", {}, el("h2", {}, T("Sonuç", "Result")), el("pre", {}, JSON.stringify(j.result, null, 1))) : null);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+async function loadLogs() {
+  const rows = await api(`/api/debug/logs?level=${document.getElementById("level").value}`);
+  const box = document.getElementById("logs");
+  box.replaceChildren(...rows.map(r => el("div", {class: r.level},
+    `${r.ts} ${r.level.padEnd(7)} ${r.logger}: ${LANG === "en" && r.msg_en ? r.msg_en : r.msg}${r.exc ? "\n" + r.exc : ""}`)));
+  if (document.getElementById("follow").checked) box.scrollTop = box.scrollHeight;
+}
+
+async function loadFailures() {
+  const rows = await api("/api/debug/failures");
+  const box = document.getElementById("failures");
+  if (!rows.length) { box.textContent = T("Hata yok.", "No failures."); return; }
+  box.replaceChildren(el("p", {}, T(`${rows.length} hatalı adım`, `${rows.length} failed steps`)), ...rows.map(r => el("details", {class: "card", style: "margin-bottom:6px"},
+    el("summary", {}, pill(L(r.step), "bad"), " ", r.file, " — ", el("span", {class: "muted"}, L(r.error))),
+    r.trace ? el("pre", {}, r.trace) : null, r.log && r.log.length ? el("pre", {}, r.log.map(L).join("\n")) : null)));
+}
+
+function placementReport(m) {
+  return el("div", {class: "card", id: `model-${m.name}`, style: "margin-bottom:14px"},
+    el("h2", {style: "margin-top:0"}, m.name, " ", m.proposals_used ? pill(T("LLM önerisi tiplerle: ön sonuç", "with LLM-proposed types: preliminary"), "warn")
+                                                                    : pill(T("onaylı tiplerle", "with confirmed types"), "ok")),
+    el("p", {class: "muted"}, T(`${m.rooms} oda, ${m.candidates} aday nokta`, `${m.rooms} rooms, ${m.candidates} candidate points`)),
+    el("div", {class: "table-wrap"}, el("table", {},
+      el("thead", {}, el("tr", {}, [T("Cihaz", "Device"), T("Test odası", "Test rooms"), T("Test cihazı", "Test devices"), T("Sayı hatası", "Count error"),
+                                    T("Tam sayı", "Exact count"), T("Kesinlik", "Precision"), T("Duyarlılık", "Recall"),
+                                    T("Kesinlik (doğru sayıyla)", "Precision (true count)"), T("Duyarlılık (doğru sayıyla)", "Recall (true count)")].map(h => el("th", {}, h)))),
+      el("tbody", {}, Object.entries(m.classes).map(([c, r]) => el("tr", {},
+        el("td", {}, DEVICE_NAMES[c] || c), el("td", {}, r.test_rooms), el("td", {}, r.test_devices), el("td", {}, r.count_mae),
+        el("td", {}, pct(r.count_exact)), el("td", {}, pct(r.precision)), el("td", {}, pct(r.recall)),
+        el("td", {}, pct(r.precision_true_count)), el("td", {}, pct(r.recall_true_count))))))));
+}
+
+function modelReport(m) {
+  if (m.kind === "placement") return placementReport(m);
+  const t = m.test || {};
+  return el("div", {class: "card", id: `model-${m.name}`, style: "margin-bottom:14px"},
+    el("h2", {style: "margin-top:0"}, m.name),
+    el("div", {class: "grid"},
+      ...[[T("Otomatik karar payı", "Automatic decision share"), pct(t.auto_share, 2)], [T("Otomatik doğruluk", "Automatic precision"), pct(t.auto_precision, 2)],
+          [T("0.5 eşikte doğruluk", "Accuracy at 0.5"), pct(t["accuracy_at_0.5"], 2)], [T("Soru (nesne)", "Questions (items)"), t.question_items],
+          [T("Yanlış silinen (m)", "Wrongly deleted (m)"), t.wrong_delete_m], [T("Yanlış silinen duvar (m)", "Wrongly deleted wall (m)"), t.wrong_delete_wall_m],
+          [T("Yanlış kalan (m)", "Wrongly kept (m)"), t.wrong_keep_m],
+          [T("0.5'te kaybedilen duvar payı", "Wall share lost at 0.5"), pct(t["wall_lost_share_at_0.5"], 2)],
+          [T("Plan içi doğruluk (0.5)", "In-plan accuracy (0.5)"), pct((m.test_in_view || {})["accuracy_at_0.5"], 2)],
+          [T("Ağaç", "Trees"), typeof m.trees === "object" ? T(`görünüş ${m.trees.view} · plan içi ${m.trees.item}`, `views ${m.trees.view} · in plan ${m.trees.item}`) : m.trees]]
+        .map(([k, v]) => el("div", {class: "card"}, el("div", {class: "label"}, k), el("div", {class: "value"}, v ?? "-")))),
+    el("p", {class: "muted"}, T(`Eşikler: sil ≥ ${m.thresholds.delete.toFixed(3)}, tut ≤ ${m.thresholds.keep.toFixed(3)} · `,
+                                `Thresholds: delete ≥ ${m.thresholds.delete.toFixed(3)}, keep ≤ ${m.thresholds.keep.toFixed(3)} · `) +
+      T(`satırlar: ${JSON.stringify(m.rows)} · projeler: ${JSON.stringify(m.pairs)}`, `rows: ${JSON.stringify(m.rows)} · projects: ${JSON.stringify(m.pairs)}`)),
+    el("details", {}, el("summary", {}, T("Test projeleri (en çok yanlış silinen önce)", "Test projects (most wrongly deleted first)")),
+      el("div", {class: "legend", style: "margin:8px 0"},
+        el("span", {}, el("i", {style: "background:#465"}), T("doğru tutuldu", "correctly kept")),
+        el("span", {}, el("i", {style: "background:#f5aaaa"}), T("doğru silindi", "correctly deleted")),
+        el("span", {}, el("i", {style: "background:#f0a000"}), T("soru", "question")),
+        el("span", {}, el("i", {style: "background:#005aff"}), T("YANLIŞ silindi", "WRONGLY deleted")),
+        el("span", {}, el("i", {style: "background:#c800c8"}), T("yanlış kaldı", "wrongly kept"))),
+      ...m.test_projects.map(p => el("details", {style: "margin:4px 0"},
+        el("summary", {}, T(`${p.folder} — yanlış silinen ${p.wrong_delete_m} m (duvar ${p.wrong_delete_wall_m} m), soru ${p.question_items}, otomatik ${pct(p.auto_share, 1)}`,
+                            `${p.folder} — wrongly deleted ${p.wrong_delete_m} m (wall ${p.wrong_delete_wall_m} m), questions ${p.question_items}, automatic ${pct(p.auto_share, 1)}`)),
+        el("img", {class: "preview", loading: "lazy", src: `/api/models/${m.name}/png/${p.project}__${p.final.slice(0, 16)}.png`})))),
+    el("details", {}, el("summary", {}, T("En etkili özellikler", "Most important features")),
+      el("pre", {}, m.importance.map(r => `${r.feature.padEnd(24)} ${r.gain}`).join("\n"))));
+}
+
+async function loadModels() {
+  const models = await api("/api/models");
+  const box = document.getElementById("models");
+  if (models.length) box.replaceChildren(...models.map(modelReport));
+}
+
+async function loadSystem() {
+  const s = await api("/api/debug/system");
+  const cards = [["Python", s.python], ["ODA", s.oda.split("\\").slice(-2).join("\\")],
+    [T("Bellek", "Memory"), s.memory.total_gb ? T(`${s.memory.free_gb} / ${s.memory.total_gb} GB boş`, `${s.memory.free_gb} / ${s.memory.total_gb} GB free`) : "-"],
+    ...Object.entries(s.disks).map(([d, v]) => [`Disk ${d}`, T(`${v.free_gb} GB boş`, `${v.free_gb} GB free`)]),
+    ...Object.entries(s.cache_counts).map(([k, v]) => [T(`Önbellek: ${k}`, `Cache: ${k}`), v])];
+  document.getElementById("sys").replaceChildren(...cards.map(([k, v]) =>
+    el("div", {class: "card"}, el("div", {class: "label"}, k), el("div", {class: "value", style: "font-size:16px"}, v))));
+  document.getElementById("sysraw").textContent = JSON.stringify(s, null, 1);
+}
+
+function refresh() {
+  ({jobs: loadJobs, logs: loadLogs, failures: loadFailures, models: loadModels, system: loadSystem})[tab]()
+    .catch(e => console.error(e));
+}
+showTab(location.hash.startsWith("#model-") ? "models" : "jobs");
+setInterval(() => { if (["jobs", "logs"].includes(tab)) refresh(); }, 2000);
+</script>
+</body>
+</html>

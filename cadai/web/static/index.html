@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Projects">cad-ai · Projeler</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+</head>
+<body>
+<main>
+  <h1 data-en="Training pipeline">Eğitim hattı</h1>
+  <div class="grid" id="steps"></div>
+  <div class="row" style="margin-top:12px">
+    <button onclick="go('inventory')" data-en="1 · Scan the inventory">1 · Envanteri tara</button>
+    <button onclick="go('convert')" data-en="2 · Convert the drawings">2 · Çizimleri dönüştür</button>
+    <button onclick="go('label')" data-en="3 · Extract the labels">3 · Etiketleri çıkar</button>
+    <button class="primary" onclick="go('train_cleanup')" data-en="4 · Train the cleanup model">4 · Temizlik modelini eğit</button>
+    <span class="muted" id="jobnote"></span>
+  </div>
+
+  <h2 data-en="Models">Modeller</h2>
+  <div id="models" class="muted" data-en="No models yet.">Henüz model yok.</div>
+
+  <h2 data-en="Projects">Projeler</h2>
+  <div class="row" style="margin-bottom:8px">
+    <input type="search" id="q" placeholder="Ara…" data-en-placeholder="Search…" oninput="drawProjects()">
+    <select id="filter" onchange="drawProjects()">
+      <option value="" data-en="All">Hepsi</option><option value="labelled" data-en="Labelled">Etiketli</option>
+      <option value="failed" data-en="Failed">Hatalı</option><option value="nopair" data-en="No pair">Çifti yok</option>
+    </select>
+    <span class="muted" id="count"></span>
+  </div>
+  <div class="table-wrap"><table>
+    <thead><tr><th data-en="Project">Proje</th><th data-en="Files">Dosyalar</th><th data-en="Conversion">Dönüştürme</th>
+      <th data-en="Label">Etiket</th><th data-en="Kept / deleted">Kaldı / silindi</th></tr></thead>
+    <tbody id="projects"></tbody>
+  </table></div>
+</main>
+<script>
+header("/");
+let PROJECTS = [];
+
+async function go(kind) {
+  const job = await runJob(kind);
+  document.getElementById("jobnote").replaceChildren(T("İş başladı: ", "Job started: "),
+    el("a", {href: `/debug#${job.id}`}, L(job.title)));
+}
+
+function stepCard(s) {
+  const pctDone = s.total ? Math.round(100 * s.done / s.total) : 0;
+  return el("div", {class: "card"},
+    el("div", {class: "label"}, L(s.title)),
+    el("div", {class: "value"}, `${s.done} / ${s.total}`),
+    el("div", {class: "bar"}, el("div", {style: `width:${pctDone}%`})),
+    s.failed ? el("div", {class: "sub"}, pill(T(`${s.failed} hata`, `${s.failed} failed`), "bad")) : null);
+}
+
+function modelBlock(m) {
+  const t = m.test || {};
+  return el("div", {class: "card", style: "margin-bottom:8px"},
+    el("div", {class: "row"}, el("b", {}, m.name),
+      pill(T(`${m.pairs.train} eğitim / ${m.pairs.test} test proje`, `${m.pairs.train} training / ${m.pairs.test} test projects`))),
+    el("div", {class: "sub"},
+      T(`Test: otomatik karar payı ${pct(t.auto_share, 1)}, otomatik doğruluk ${pct(t.auto_precision, 2)}, ` +
+        `yanlış silinen duvar ${t.wrong_delete_wall_m ?? "-"} m, soru ${t.question_items ?? "-"} nesne`,
+        `Test: automatic decision share ${pct(t.auto_share, 1)}, automatic precision ${pct(t.auto_precision, 2)}, ` +
+        `wrongly deleted wall ${t.wrong_delete_wall_m ?? "-"} m, questions ${t.question_items ?? "-"} items`)),
+    el("div", {class: "sub"}, el("a", {href: `/debug#model-${m.name}`}, T("Ayrıntılı rapor →", "Detailed report →"))));
+}
+
+async function load() {
+  const ov = await api("/api/overview");
+  document.getElementById("steps").replaceChildren(...ov.steps.map(stepCard));
+  const cleanup = ov.models.filter(m => m.kind === "cleanup");
+  if (cleanup.length) document.getElementById("models").replaceChildren(...cleanup.slice(0, 3).map(modelBlock));
+  PROJECTS = await api("/api/projects");
+  drawProjects();
+}
+
+const ROLE = {final: T("son", "final"), raw: T("ham", "raw")};
+
+function drawProjects() {
+  const q = document.getElementById("q").value.toLowerCase();
+  const f = document.getElementById("filter").value;
+  const rows = PROJECTS.filter(p => {
+    if (q && !p.folder.toLowerCase().includes(q)) return false;
+    const lab = p.pairs.map(x => x.label).filter(Boolean);
+    const failed = p.files.some(x => x.scene && !x.scene.ok) || lab.some(l => !l.ok);
+    if (f === "labelled") return lab.some(l => l.ok);
+    if (f === "failed") return failed;
+    if (f === "nopair") return !p.pairs.some(x => x.raw);
+    return true;
+  });
+  document.getElementById("count").textContent = T(`${rows.length} proje`, `${rows.length} projects`);
+  document.getElementById("projects").replaceChildren(...rows.map(p => {
+    const scenes = p.files.filter(x => x.scene);
+    const ok = scenes.filter(x => x.scene.ok).length;
+    const lab = p.pairs.map(x => x.label).find(Boolean);
+    return el("tr", {},
+      el("td", {}, el("a", {href: `/project/${p.id}`}, p.folder)),
+      el("td", {}, p.files.map(x => pill(ROLE[x.role] || T("taslak", "draft")))),
+      el("td", {}, scenes.length ? pill(`${ok}/${p.files.length}`, ok === scenes.length ? "ok" : "bad") : pill(T("bekliyor", "pending"))),
+      el("td", {}, lab ? (lab.ok ? pill(T("hizalandı", "aligned"), "ok") : pill(T("hizalanamadı", "not aligned"), "bad")) : pill(T("bekliyor", "pending"))),
+      el("td", {class: "muted"}, lab && lab.counts ? `${lab.counts.keep} / ${lab.counts.delete}` : ""));
+  }));
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Placement">cad-ai · Çizim</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<style>
+  .legend span.sym { display: inline-block; width: 12px; height: 12px; margin: 0 4px 0 10px; vertical-align: -1px; }
+  .counts td { padding: 2px 10px 2px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1 data-en="Electrical placement">Elektrik yerleşimi</h1>
+  <div class="card">
+    <div class="row">
+      <b data-en="Cleaned project">Temizlenmiş proje</b>
+      <select id="output"></select>
+      <button class="primary" onclick="place()" data-en="Place">Yerleştir</button>
+      <span class="muted" id="note"></span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <b data-en="Instruction">Talimat</b>
+      <input id="instruction" style="flex:1;min-width:240px" maxlength="1000"
+             placeholder="İsteğe bağlı, ör. salonlara en az 4 priz koy; anahtarları kapının kilit tarafına koy"
+             data-en-placeholder="Optional, e.g. put at least 4 sockets in living rooms; put switches on the latch side of the door">
+      <button onclick="translate()" data-en="Turn into rules">Kurala çevir</button>
+    </div>
+    <div id="rules" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:6px">
+      <button onclick="addRule()" data-en="Add rule">Kural ekle</button>
+      <button onclick="saveBook()" data-en="Save the permanent rules to the rule book">Kalıcıları deftere yaz</button>
+      <span class="muted" id="rulenote"></span>
+    </div>
+    <div class="sub" data-en-html="Rooms are read in the floor plans of the cleanup result; for each room a model learned from the
+      archive chooses how many devices it needs and where they go (ceiling light, socket, wet-area socket, switch, apartment panel,
+      emergency light). If you write an instruction, Haiku turns it into rules (a few cents); you can check and correct the rules
+      before placing, and the list applied is exactly the list shown above. Rules marked “permanent” are saved to the rule book and
+      come pre-filled in every project. The result is written as a DWG on ELK-* layers over the clean drawing. For a new cleanup see
+      the <a href=&quot;/clean&quot;>Clean</a> page.">Temizlik sonucundaki kat planlarında odalar okunur, her oda için arşivden öğrenilmiş model kaç cihaz
+      gerektiğini ve nereye konacağını seçer (tavan armatürü, priz, etanj priz, anahtar, daire panosu, acil aydınlatma).
+      Talimat yazarsanız Haiku onu kurala çevirir (birkaç kuruş); kuralları yerleştirmeden önce kontrol edip
+      düzeltebilirsiniz, uygulanan liste tam olarak yukarıda görünen listedir. “Kalıcı” işaretli kurallar kural
+      defterine yazılır ve her projede baştan listede gelir.
+      Sonuç temiz çizimin üstüne ELK-* katmanlarında DWG olarak yazılır. Yeni temizlik için <a href="/clean">Temizle</a> sayfası.</div>
+    <div class="legend sub" id="legend"></div>
+  </div>
+
+  <h2 data-en="Placements">Yerleşimler</h2>
+  <div id="results" class="muted" data-en="No placements yet.">Henüz yerleşim yok.</div>
+</main>
+<script>
+header("/draw");
+const SYM = {
+  light_ceiling: "border:3px solid rgb(235,140,0);border-radius:50%",
+  socket: "background:rgb(220,0,0);border-radius:50%",
+  socket_wet: "background:rgb(140,0,170)",
+  switch: "width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid rgb(0,90,230)",
+  panel: "width:7px;height:16px;border:3px solid rgb(70,70,70)",
+  light_emergency: "border:3px solid rgb(0,150,60);border-radius:50%;box-shadow:inset 0 0 0 3px #fff, inset 0 0 0 6px rgb(0,150,60)"};
+document.getElementById("legend").replaceChildren(...Object.keys(SYM).map(k =>
+  el("span", {}, el("span", {class: "sym", style: SYM[k]}), DEVICE_NAMES[k])));
+const TAG_NAMES = {latch: T("kapının kilit tarafı", "latch side of the door"), window: T("pencere", "window"),
+                   door: T("kapı yanı", "next to the door"), corner: T("köşe", "corner")};
+let vocab = {classes: [], room_types: [], tags: []};
+let rules = [];                    // what is shown is what is applied: {class, room_types, min, max, near, keep}
+let translated = null;             // the instruction the list was made from
+
+async function loadBook() {
+  vocab = await api("/api/rulebook");
+  rules = vocab.rules.map(r => ({...r, keep: true}));
+  drawRules();
+}
+
+function drawRules() {
+  const box = document.getElementById("rules");
+  if (!rules.length) { box.replaceChildren(el("div", {class: "muted"}, T("Kural yok; model kendi başına yerleştirir.", "No rules; the model places on its own."))); return; }
+  const num = (r, k) => el("input", {type: "number", min: 0, max: 50, style: "width:56px", value: r[k] ?? "",
+    oninput: e => { r[k] = e.target.value === "" ? null : Number(e.target.value); }});
+  box.replaceChildren(el("table", {class: "counts"},
+    el("thead", {}, el("tr", {}, [T("cihaz", "device"), T("odalar (seçilmezse hepsi)", "rooms (all if none chosen)"), T("en az", "min"),
+                                  T("en çok", "max"), T("yakınına", "near"), T("kalıcı", "permanent"), ""].map(h => el("th", {}, h)))),
+    el("tbody", {}, rules.map((r, i) => el("tr", {},
+      el("td", {}, el("select", {onchange: e => { r.class = e.target.value; }},
+        vocab.classes.map(c => { const o = el("option", {value: c}, DEVICE_NAMES[c] || c); o.selected = c === r.class; return o; }))),
+      el("td", {}, vocab.room_types.map(t => el("label", {style: "margin-right:8px;white-space:nowrap"},
+        (() => { const b = el("input", {type: "checkbox", onchange: e => {
+          r.room_types = e.target.checked ? [...r.room_types, t] : r.room_types.filter(x => x !== t); }});
+          b.checked = r.room_types.includes(t); return b; })(), ROOM_NAMES[t] || t))),
+      el("td", {}, num(r, "min")), el("td", {}, num(r, "max")),
+      el("td", {}, el("select", {onchange: e => { r.near = e.target.value || null; }},
+        [el("option", {value: ""}, "—"), ...vocab.tags.map(t => { const o = el("option", {value: t}, TAG_NAMES[t] || t); o.selected = t === r.near; return o; })])),
+      el("td", {}, (() => { const b = el("input", {type: "checkbox", onchange: e => { r.keep = e.target.checked; }}); b.checked = !!r.keep; return b; })()),
+      el("td", {}, el("button", {onclick: () => { rules.splice(i, 1); drawRules(); }}, T("sil", "delete"))))))));
+}
+
+function addRule() {
+  rules.push({class: vocab.classes[0], room_types: [], min: null, max: null, near: null, keep: false});
+  drawRules();
+}
+
+async function translate() {
+  const text = document.getElementById("instruction").value.trim();
+  const note = document.getElementById("rulenote");
+  if (!text) { note.textContent = T("Önce bir talimat yazın.", "Write an instruction first."); return; }
+  note.textContent = T("Haiku kurala çeviriyor…", "Haiku is turning it into rules…");
+  try {
+    const res = await api("/api/steer", {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify({instruction: text})});
+    rules = rules.filter(r => r.keep).concat(res.rules.map(r => ({...r, keep: false})));
+    translated = text;
+    drawRules();
+    note.textContent = T(`${res.rules.length} kural çıktı ($${res.cost.toFixed(3)}). Kontrol edin, gerekirse düzeltin.`,
+                         `${res.rules.length} rules ($${res.cost.toFixed(3)}). Check them and correct if needed.`);
+  } catch (e) { note.textContent = T("Hata: ", "Error: ") + e.message; }
+}
+
+async function saveBook() {
+  const note = document.getElementById("rulenote");
+  try {
+    const kept = await api("/api/rulebook", {method: "PUT", headers: {"Content-Type": "application/json"},
+                                             body: JSON.stringify({rules: rules.filter(r => r.keep)})});
+    note.textContent = T(`Kural defterinde ${kept.length} kural var.`, `The rule book has ${kept.length} rules.`);
+  } catch (e) { note.textContent = T("Hata: ", "Error: ") + e.message; }
+}
+
+async function load() {
+  const outs = await api("/api/outputs");
+  const sel = document.getElementById("output");
+  const keep = sel.value;
+  sel.replaceChildren(el("option", {value: ""}, T("Temizlik sonucu seçin…", "Choose a cleanup result…")));
+  for (const o of outs) {
+    if (!o.files.includes("clean.dxf")) continue;
+    const src = (o.source || o.name).split(/[\\/]/).pop();
+    const mode = o.mode === "agent" ? T("Claude temizliği", "Claude cleanup") : o.mode === "tools" ? T("araç temizliği", "tools cleanup") : (o.mode || "");
+    sel.append(el("option", {value: o.name}, `${src} · ${mode} · ${o.name.slice(-15)}` + (o.placement ? T("  ✓ yerleşim var", "  ✓ has placement") : "")));
+  }
+  sel.value = keep;
+  const placed = outs.filter(o => o.placement);
+  const box = document.getElementById("results");
+  if (!placed.length) return;
+  box.className = "";
+  box.replaceChildren(...placed.map(card));
+}
+
+function card(o) {
+  const p = o.placement;
+  const url = f => `/api/outputs/${encodeURIComponent(o.name)}/${f}`;
+  const src = (o.source || o.name).split(/[\\/]/).pop();
+  const rooms = p.plans.reduce((n, pl) => n + pl.rooms.length, 0);
+  const typed = p.plans.reduce((n, pl) => n + pl.rooms.filter(r => r.type).length, 0);
+  const nRules = p.rules && p.rules.length ? p.rules.length : 0;
+  return el("div", {class: "card", style: "margin-bottom:14px"},
+    el("div", {class: "row"}, el("b", {}, src),
+      el("span", {class: "muted"}, T(`${p.plans.length} kat planı · ${rooms} oda (${typed} tipli) · model ${p.model}` + (nRules ? ` · ${nRules} kural` : ""),
+                                     `${p.plans.length} floor plans · ${rooms} rooms (${typed} typed) · model ${p.model}` + (nRules ? ` · ${nRules} rules` : ""))),
+      p.instruction ? el("span", {class: "muted"}, T("talimat: ", "instruction: "), `“${p.instruction}”`) : null,
+      el("a", {href: `/edit?output=${encodeURIComponent(o.name)}`, class: "button"}, T("Düzelt", "Correct")),
+      o.files.includes("placed_corrected.dwg") ? el("a", {href: url("placed_corrected.dwg"), class: "button"}, T("Düzeltilmiş DWG", "Corrected DWG")) : null,
+      o.files.includes("placed.dwg") ? el("a", {href: url("placed.dwg"), class: "button primary"}, T("DWG indir", "Download DWG")) :
+        o.files.includes("placed.dxf") ? el("a", {href: url("placed.dxf"), class: "button"}, T("DXF indir", "Download DXF")) : null),
+    el("table", {class: "counts"}, el("tbody", {}, el("tr", {}, Object.entries(p.counts).map(([k, n]) =>
+      el("td", {}, `${DEVICE_NAMES[k] || k}: `, el("b", {}, n)))))),
+    p.score ? el("table", {class: "counts"}, el("thead", {}, el("tr", {}, ["", T("biz", "ours"), T("mühendis", "engineer"),
+                                                                          T("50 cm içinde", "within 50 cm"), T("1 m içinde", "within 1 m")].map(h => el("th", {}, h)))),
+      el("tbody", {}, Object.entries(p.score).map(([k, v]) => el("tr", {}, el("td", {}, DEVICE_NAMES[k] || k), el("td", {}, v.ours),
+        el("td", {}, v.engineer), el("td", {}, v.hits_05), el("td", {}, v.hits_10))))) : null,
+    o.files.includes("placed_compare.png") ? el("div", {}, el("div", {class: "label"},
+      T("Arşiv projesi: dolu = mühendisin cihazı, halka = bizim", "Archive project: filled = the engineer's device, ring = ours")),
+      el("img", {class: "preview", loading: "lazy", src: url("placed_compare.png")})) : null,
+    el("img", {class: "preview", loading: "lazy", src: url("placed.png") + `?t=${p.created || ""}`}));
+}
+
+async function place() {
+  const output = document.getElementById("output").value;
+  const note = document.getElementById("note");
+  if (!output) { note.textContent = T("Önce bir temizlik sonucu seçin.", "Choose a cleanup result first."); return; }
+  const text = document.getElementById("instruction").value.trim();
+  if (text && text !== translated) {
+    await translate();
+    if (translated === text) note.textContent = T("Talimat kurala çevrildi; kuralları kontrol edip yeniden Yerleştir'e basın.",
+                                                  "The instruction was turned into rules; check them and press Place again.");
+    return;
+  }
+  try {
+    const job = await api("/api/place", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({output, instruction: text,
+                            rules: rules.map(({keep, ...r}) => r)})});
+    note.replaceChildren(T("İş başladı: ", "Job started: "), el("a", {href: `/debug#${job.id}`}, T("ilerlemeyi izle", "follow progress")));
+  } catch (e) { note.textContent = T("Hata: ", "Error: ") + e.message; }
+}
+
+loadBook();
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cad-ai · Demo</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<style>
+  main { max-width: 1200px; }
+  .hero { padding: 8px 0 4px; }
+  .hero h1 { font-size: 26px; margin-bottom: 8px; }
+  .hero p { font-size: 15px; line-height: 1.55; max-width: 820px; margin: 0 0 10px; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 18px 0 8px; }
+  .steps .card b { display: block; font-size: 14px; margin-bottom: 4px; }
+  .steps .card p { margin: 0; color: var(--muted); line-height: 1.5; font-size: 13px; }
+  .steps .n { display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff;
+              text-align: center; line-height: 22px; font-size: 12px; font-weight: 700; margin-right: 6px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 12px 0; }
+  .kpis .value { font-size: 26px; }
+  .project { margin-top: 34px; padding-top: 6px; border-top: 1px solid var(--line); }
+  .project h2 { font-size: 20px; margin: 18px 0 6px; }
+  figure { margin: 14px 0; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+  .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .scroll img { width: auto; height: 220px; max-width: none; border: none; border-radius: 0; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); margin: 6px 0; }
+  .legend .sym { display: inline-block; width: 12px; height: 12px; margin-right: 5px; vertical-align: -1px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; padding: 5px 12px; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .downloads { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+  .note { font-size: 13px; color: var(--muted); line-height: 1.5; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <h1 data-en="From an architect's drawing to an electrical layout">Mimarın çiziminden elektrik yerleşimine</h1>
+    <p data-en-html="An electrical engineering office receives the architect's DWG for every building and draws the electrical
+      project on top of it: first it strips the drawing down to a clean base plan, then it places hundreds of lights,
+      sockets, switches and panels room by room. <b>cad-ai</b> learned both steps from the office's own archive of
+      about 250 past projects, where the architect's raw drawing and the engineer's finished drawing sit side by side.">Bir elektrik
+      mühendisliği ofisi her bina için mimarın DWG çizimini alır ve elektrik projesini onun üstüne çizer: önce çizimi temiz bir
+      altlığa indirir, sonra oda oda yüzlerce armatür, priz, anahtar ve pano yerleştirir. <b>cad-ai</b> bu iki adımı ofisin
+      yaklaşık 250 eski projelik arşivinden öğrendi; orada mimarın ham çizimi ile mühendisin bitmiş çizimi yan yana duruyor.</p>
+    <p class="note" data-en="Below are two real projects. Neither was used for training, so the comparison with the engineer is honest. The drawings are anonymised (see the note at the bottom); the DWG files open in AutoCAD.">Aşağıda
+      iki gerçek proje var. İkisi de eğitimde kullanılmadı, yani mühendisle karşılaştırma dürüst. Çizimler anonimleştirildi
+      (en alttaki nota bakın); DWG dosyaları AutoCAD'de açılır.</p>
+  </section>
+
+  <div class="steps">
+    <div class="card"><b><span class="n">1</span><span data-en="Clean the drawing">Çizimi temizle</span></b>
+      <p data-en="The sheet is split into drawing regions; Claude picks the floor plans. Fixed tools then remove text, dimensions, furniture, door swings and hatching, and a model decides ambiguous layers. Claude checks the result from a picture.">Pafta
+        çizim bölgelerine ayrılır; Claude kat planlarını seçer. Sonra sabit araçlar yazıyı, ölçüyü, mobilyayı, kapı yaylarını ve
+        taramayı siler; belirsiz katmanlara bir model karar verir. Claude sonucu resimden kontrol eder.</p></div>
+    <div class="card"><b><span class="n">2</span><span data-en="Read the rooms">Odaları oku</span></b>
+      <p data-en="Rooms are closed by walls and door swings and seeded by the architect's room names and area labels. Every room's area is checked against the area the architect wrote.">Odalar
+        duvarlar ve kapı yaylarıyla kapanır, mimarın oda adları ve alan yazılarından başlar. Her odanın alanı mimarın yazdığı
+        alanla karşılaştırılır.</p></div>
+    <div class="card"><b><span class="n">3</span><span data-en="Place the devices">Cihazları yerleştir</span></b>
+      <p data-en="Gradient-boosted models trained on the archive choose how many devices each room needs and rank every candidate spot. Office rules can be written in plain language; Claude Haiku turns them into checked rules.">Arşivle
+        eğitilmiş gradient boosting modelleri her odanın kaç cihaz istediğini seçer ve her aday noktayı sıralar. Ofis kuralları
+        düz cümleyle yazılabilir; Claude Haiku onları kontrol edilebilir kurallara çevirir.</p></div>
+    <div class="card"><b><span class="n">4</span><span data-en="The engineer corrects">Mühendis düzeltir</span></b>
+      <p data-en="A web editor lets the engineer move, add or delete devices and mark cleanup mistakes, with a reason. Every correction is logged as training data, and the corrected DWG is exported.">Bir
+        web düzenleyicide mühendis cihazları taşır, ekler, siler ve temizlik hatalarını gerekçesiyle işaretler. Her düzeltme
+        eğitim verisi olarak kaydedilir; düzeltilmiş DWG dışa yazılır.</p></div>
+  </div>
+
+  <h2 data-en="Measured on unseen archive projects">Görülmemiş arşiv projelerinde ölçüldü</h2>
+  <div class="kpis">
+    <div class="card"><div class="label" data-en="Devices within 1 m of the engineer's">Mühendisinkine 1 m içinde cihaz</div><div class="value">F1 0.60</div>
+      <div class="sub" data-en="all devices of the test projects (0.53 before the new room reader)">test projelerinin bütün cihazları (yeni oda okuyucudan önce 0.53)</div></div>
+    <div class="card"><div class="label" data-en="Room areas match the architect">Oda alanları mimarınkiyle uyuşuyor</div><div class="value">73%</div>
+      <div class="sub" data-en="within 10% of the written area; 76% after each architect's convention">yazılan alanın %10'u içinde; her mimarın alışkanlığına göre %76</div></div>
+    <div class="card"><div class="label" data-en="Ceiling lights">Tavan armatürleri</div><div class="value">81%</div>
+      <div class="sub" data-en="of the lights we place are within 1 m of one the engineer drew">koyduğumuz armatürlerin mühendisin çizdiği birine 1 m içinde olanı</div></div>
+    <div class="card"><div class="label" data-en="Human ceiling">İnsan tavanı</div><div class="value">0.80–0.87</div>
+      <div class="sub" data-en="how well one engineer's layouts agree with another's on the same metric">aynı ölçüyle bir mühendisin yerleşiminin bir başkasınınkiyle uyumu</div></div>
+  </div>
+
+  <div class="legend" id="legend"></div>
+  <div id="projects" class="muted" data-en="Loading…">Yükleniyor…</div>
+
+  <h2 data-en="About the files">Dosyalar hakkında</h2>
+  <p class="note" data-en-html="Each project has three DWG files: <b>1-architect-raw</b> (what the office receives), <b>2-cleaned</b>
+    (our base plan) and <b>3-electrical</b> (our devices on ELK-* layers over the base plan). They are anonymised:
+    every text outside the floor plans (title block, site plan, project tables) was removed, and inside the plans
+    anything that looks like an address, phone number, e-mail or ID number; embedded files and pictures were removed
+    too. A scan of every string in the files, including hidden data, finds nothing personal. The owners' names may
+    appear. The office agreed to this demo.">Her projede üç DWG var: <b>1-architect-raw</b> (ofise gelen), <b>2-cleaned</b>
+    (bizim altlığımız) ve <b>3-electrical</b> (altlığın üstünde ELK-* katmanlarında bizim cihazlarımız). Dosyalar anonimleştirildi:
+    kat planlarının dışındaki bütün yazılar (antet, vaziyet, proje tabloları) ve planların içinde adres, telefon, e-posta ya da
+    kimlik numarasına benzeyen her şey silindi; gömülü dosyalar ve resimler de silindi. Dosyalardaki her metnin (gizli veri dahil)
+    taraması kişisel bir şey bulmuyor. Mal sahiplerinin adları görünebilir. Ofis bu demoya izin verdi.</p>
+  <p class="note" data-en="The live tool (cleanup, placement and the correction editor) is in the menu above; the code and the design decisions behind it are in the repository.">Canlı
+    araç (temizlik, yerleştirme ve düzeltme düzenleyicisi) yukarıdaki menüde; kod ve arkasındaki tasarım kararları depoda.</p>
+</main>
+<script>
+header("/demo");
+const SYM = {
+  light_ceiling: "border:3px solid rgb(235,140,0);border-radius:50%",
+  socket: "background:rgb(220,0,0);border-radius:50%",
+  socket_wet: "background:rgb(140,0,170)",
+  switch: "width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:12px solid rgb(0,90,230)",
+  panel: "width:7px;height:16px;border:3px solid rgb(70,70,70)",
+  light_emergency: "border:3px solid rgb(0,150,60);border-radius:50%;box-shadow:inset 0 0 0 3px #fff, inset 0 0 0 6px rgb(0,150,60)"};
+const ORDER = ["light_ceiling", "socket", "socket_wet", "switch", "panel", "light_emergency"];
+document.getElementById("legend").replaceChildren(...ORDER.map(k =>
+  el("span", {}, el("span", {class: "sym", style: SYM[k]}), DEVICE_NAMES[k])));
+
+function project(f) {
+  const file = n => `/demo-files/${f.key}/${n}`;
+  const plans = f.files.filter(n => /^plan-\d+\.png$/.test(n));
+  const total = Object.values(f.devices).reduce((a, b) => a + b, 0);
+  const ac = f.area_check;
+  const figs = plans.map(n => {
+    const img = el("img", {src: file(n), loading: "lazy", alt: T("Cihazlarımızla kat planı", "Floor plan with our devices"),
+                           title: T("Tam boyut açmak için tıklayın", "Click to open full size"),
+                           style: "cursor:zoom-in", onclick: () => window.open(img.src, "_blank")});
+    const vs = n.replace(".png", "-vs-engineer.png");
+    const seg = el("div", {class: "seg"},
+      el("button", {class: "on", onclick: e => { img.src = file(n); on(e); }}, T("Bizim yerleşim", "Our layout")),
+      f.files.includes(vs) ? el("button", {onclick: e => { img.src = file(vs); on(e); }}, T("Biz ve mühendis", "Ours vs the engineer's")) : null);
+    function on(e) { seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === e.target)); }
+    return el("figure", {}, el("div", {class: "row", style: "margin-bottom:6px"}, seg,
+        el("span", {class: "note"}, T("Karşılaştırma: dolu nokta = mühendisin cihazı, halka = bizim, aynı renk = aynı tip.",
+                                      "Comparison: filled dot = the engineer's device, ring = ours, same colour = same type."))),
+      img, el("figcaption", {}, T("Oda etiketleri oda okuyucumuzun bulduğu tip ve taban alanı. Tam boyut için resme tıklayın.",
+                                  "Room labels are what our room reader found (type and floor area). Click the picture to open it full size.")));
+  });
+  const rows = ORDER.filter(k => f.vs_engineer[k]).map(k => { const v = f.vs_engineer[k];
+    return el("tr", {}, el("td", {}, el("span", {class: "sym", style: SYM[k] + ";display:inline-block;width:12px;height:12px;margin-right:6px;vertical-align:-1px"}), DEVICE_NAMES[k]),
+      el("td", {class: "num"}, v.ours), el("td", {class: "num"}, v.engineer), el("td", {class: "num"}, v.hits_05), el("td", {class: "num"}, v.hits_10)); });
+  return el("section", {class: "project"},
+    el("h2", {}, f.title),
+    el("div", {class: "kpis"},
+      el("div", {class: "card"}, el("div", {class: "label"}, T("Bulunan kat planı", "Floor plans found")), el("div", {class: "value"}, f.plans),
+        el("div", {class: "sub"}, T("kesit, görünüş, vaziyet ve detaylar silindi", "sections, elevations, site plan and details removed"))),
+      el("div", {class: "card"}, el("div", {class: "label"}, T("Okunan oda", "Rooms read")), el("div", {class: "value"}, f.rooms),
+        el("div", {class: "sub"}, ac.rooms_with_area_label ? T(`${ac.rooms_with_area_label} odanın ${ac.within_10pct} tanesi mimarın alanının %10'u içinde`,
+                                                               `${ac.within_10pct} of ${ac.rooms_with_area_label} within 10% of the architect's area`) : "")),
+      el("div", {class: "card"}, el("div", {class: "label"}, T("Yerleştirilen cihaz", "Devices placed")), el("div", {class: "value"}, total),
+        el("div", {class: "sub"}, T("altı cihaz tipi, her oda", "six device types, every room"))),
+      el("div", {class: "card"}, el("div", {class: "label"}, T("Mühendisle uyum", "Agreement with the engineer")), el("div", {class: "value"}, f.f1_1m != null ? `F1 ${f.f1_1m.toFixed(2)}` : "–"),
+        el("div", {class: "sub"}, T("1 m içindeki cihazlar, mühendisin çizdiği katlarda", "devices within 1 m, on the floors the engineer drew")))),
+    el("figure", {}, el("div", {class: "scroll"}, el("img", {src: file("sheet.png"), loading: "lazy", alt: T("Bütün pafta", "The whole sheet")})),
+      el("figcaption", {}, T("Mimarın bütün paftası (yana kaydırın). Koyu: temizliğin bıraktığı. Pembe: sildiği.",
+                             "The architect's whole sheet (scroll sideways). Dark: what the cleanup kept. Pink: what it removed."))),
+    ...figs,
+    el("div", {class: "table-wrap"}, el("table", {},
+      el("thead", {}, el("tr", {}, [T("Cihaz", "Device"), T("Biz", "Ours"), T("Mühendis", "Engineer"), T("50 cm içinde", "Within 50 cm"),
+                                    T("1 m içinde", "Within 1 m")].map((h, i) => el("th", {class: i ? "num" : ""}, h)))),
+      el("tbody", {}, rows))),
+    el("div", {class: "downloads"},
+      el("a", {class: "button", href: file("1-architect-raw.dwg")}, T("1 · Mimarın ham çizimi (DWG)", "1 · Architect's raw drawing (DWG)")),
+      el("a", {class: "button", href: file("2-cleaned.dwg")}, T("2 · Temiz altlığımız (DWG)", "2 · Our cleaned base (DWG)")),
+      el("a", {class: "button primary", href: file("3-electrical.dwg")}, T("3 · Elektrik yerleşimimiz (DWG)", "3 · Our electrical layout (DWG)"))));
+}
+
+api("/api/demo").then(list => {
+  const box = document.getElementById("projects");
+  if (!list.length) { box.textContent = T("Henüz demo projesi yok.", "No demo projects built yet."); return; }
+  box.className = "";
+  box.replaceChildren(...list.map(project));
+}).catch(e => { document.getElementById("projects").textContent = T("Demo yüklenemedi: ", "Could not load the demo: ") + e.message; });
+</script>
+</body>
+</html>

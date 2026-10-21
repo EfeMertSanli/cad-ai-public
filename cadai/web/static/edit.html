@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Correct">cad-ai · Düzelt</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<style>
+  main { max-width: none; padding: 14px 18px 20px; }
+  .work { display: grid; grid-template-columns: 1fr 340px; gap: 12px; }
+  @media (max-width: 900px) { .work { grid-template-columns: 1fr; } }
+  #view { position: relative; height: calc(100vh - 190px); min-height: 420px; overflow: hidden; background: #fff;
+          border: 1px solid var(--line); border-radius: 8px; touch-action: none; cursor: grab; user-select: none; }
+  #view.adding { cursor: crosshair; }
+  #view img { position: absolute; pointer-events: none; image-rendering: auto; }
+  #view svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+  .side { display: flex; flex-direction: column; gap: 10px; max-height: calc(100vh - 190px); overflow: auto; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; }
+  .chip { padding: 2px 8px; border-radius: 12px; border: 1px solid var(--line); font-size: 12px; cursor: pointer; background: #fff; }
+  .chip.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 6px; min-height: 48px; }
+  .palette button { padding: 4px 8px; font-size: 12px; }
+  .palette button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .kv { font-size: 13px; } .kv b { font-weight: 600; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .good { color: var(--ok); } .warn { color: var(--warn); }
+  table.small td, table.small th { padding: 4px 6px; font-size: 12px; }
+  tr.go { cursor: pointer; } tr.go:hover td { background: #f3f6fd; }
+</style>
+</head>
+<body>
+<main>
+  <div class="row" style="margin-bottom:8px">
+    <b data-en="Output">Çıktı</b>
+    <select id="output" style="max-width:520px"></select>
+    <div class="tabs" style="margin:0 0 0 12px;border:none">
+      <button data-tab="devices" class="active" data-en="Devices">Cihazlar</button>
+      <button data-tab="clean" data-en="Cleanup">Temizlik</button>
+      <button data-tab="log" data-en="Reasons">Gerekçeler</button>
+    </div>
+    <span style="flex:1"></span>
+    <span class="muted" id="status"></span>
+    <button id="export" class="primary" data-en="Corrected DWG">Düzeltilmiş DWG</button>
+  </div>
+  <div class="work">
+    <div id="view"><img id="bg" alt=""><svg id="ov"></svg></div>
+    <div class="side" id="side"></div>
+  </div>
+  <div id="logbox" style="display:none"></div>
+</main>
+<script src="/static/common.js"></script>
+<script>
+header("/edit");
+const SVGNS = "http://www.w3.org/2000/svg";
+const COL = {light_ceiling: "rgb(235,140,0)", socket: "rgb(220,0,0)", socket_wet: "rgb(140,0,170)", switch: "rgb(0,90,230)",
+             panel: "rgb(70,70,70)", light_emergency: "rgb(0,150,60)"};
+const STATUS_NAMES = {open: T("bakılmadı", "not reviewed"), accepted: T("kabul", "accepted"), changed: T("değişti", "changed"),
+                      added: T("eklendi", "added"), deleted: T("silindi", "deleted")};
+const ACTION_NAMES = {move: T("taşındı", "moved"), add: T("eklendi", "added"), delete: T("silindi", "deleted"),
+                      retype: T("tipi değişti", "type changed"), room: T("oda işareti", "room mark")};
+const q = new URLSearchParams(location.search);
+let output = q.get("output") || "";
+let tab = "devices";
+const devName = t => (D && D.names && L(D.names[t])) || DEVICE_NAMES[t] || t;
+// the engineer's reasons are stored by their Turkish text; shown in the chosen language
+let REASON_LABELS = {};
+function learnReasons(list) { for (const r of list || []) REASON_LABELS[r.tr] = L(r); }
+const reasonText = r => REASON_LABELS[r] || r;
+
+// ------------------------------------------------------------------ view: pan / zoom over a server picture
+const view = {cx: 0, cy: 0, s: 20, img: null, timer: null, ready: false};
+const box = document.getElementById("view"), bg = document.getElementById("bg"), ov = document.getElementById("ov");
+function size() { return [box.clientWidth, box.clientHeight]; }
+function toPx(x, y) { const [W, H] = size(); return [(x - view.cx) * view.s + W / 2, (view.cy - y) * view.s + H / 2]; }
+function toM(px, py) { const [W, H] = size(); return [view.cx + (px - W / 2) / view.s, view.cy - (py - H / 2) / view.s]; }
+function fit(b) {
+  if (!b) return;
+  const [W, H] = size();
+  view.cx = (b[0] + b[2]) / 2; view.cy = (b[1] + b[3]) / 2;
+  view.s = Math.min(W / Math.max(b[2] - b[0], 1), H / Math.max(b[3] - b[1], 1)) * 0.95;
+  changed();
+}
+function placeImg() {
+  if (!view.img) return;
+  const [a, b] = toPx(view.img[0], view.img[3]);
+  bg.style.left = a + "px"; bg.style.top = b + "px";
+  bg.style.width = (view.img[2] - view.img[0]) * view.s + "px";
+  bg.style.height = (view.img[3] - view.img[1]) * view.s + "px";
+}
+function changed() {
+  placeImg(); draw();
+  clearTimeout(view.timer);
+  view.timer = setTimeout(fetchImg, 160);
+}
+function fetchImg() {
+  if (!output) return;
+  const [W, H] = size();
+  const [x0, y1] = toM(0, 0), [x1, y0] = toM(W, H);
+  const w = Math.round(W * Math.min(window.devicePixelRatio || 1, 2));
+  const mode = tab === "clean" ? "clean" : "place";
+  const url = `/api/outputs/${encodeURIComponent(output)}/view/${mode}.png?x0=${x0}&y0=${y0}&x1=${x1}&y1=${y1}&w=${w}&t=${Date.now()}`;
+  const pre = new Image();
+  pre.onload = () => { bg.src = pre.src; view.img = [x0, y0, x1, y1]; placeImg(); };
+  pre.src = url;
+}
+box.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = box.getBoundingClientRect();
+  const [mx, my] = toM(e.clientX - r.left, e.clientY - r.top);
+  const k = Math.exp(-e.deltaY * 0.0015);
+  view.s = Math.min(Math.max(view.s * k, 0.5), 2000);
+  const [nx, ny] = toM(e.clientX - r.left, e.clientY - r.top);
+  view.cx += mx - nx; view.cy += my - ny;
+  changed();
+}, {passive: false});
+
+// pointer: drag a device, drag a box (shift, cleanup), pan, or click
+let drag = null;
+box.addEventListener("pointerdown", e => {
+  const r = box.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  const dev = e.target.closest && e.target.closest("[data-dev]");
+  drag = {px, py, x0: px, y0: py, moved: false, dev: dev ? dev.dataset.dev : null, shift: e.shiftKey, alt: e.altKey};
+  box.setPointerCapture(e.pointerId);
+});
+box.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const r = box.getBoundingClientRect();
+  const px = e.clientX - r.left, py = e.clientY - r.top;
+  if (Math.hypot(px - drag.x0, py - drag.y0) > 4) drag.moved = true;
+  if (!drag.moved) return;
+  if (drag.dev) { drag.at = toM(px, py); draw(); }
+  else if (drag.shift && tab === "clean") { drag.band = [drag.x0, drag.y0, px, py]; draw(); }
+  else { view.cx -= (px - drag.px) / view.s; view.cy += (py - drag.py) / view.s; changed(); }
+  drag.px = px; drag.py = py;
+});
+box.addEventListener("pointerup", e => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  const r = box.getBoundingClientRect();
+  const [x, y] = toM(e.clientX - r.left, e.clientY - r.top);
+  if (tab === "devices") {
+    if (d.dev && d.moved) return act({action: "move", id: d.dev, x, y});
+    if (!d.moved) return devClick(d.dev, x, y);
+  } else if (tab === "clean") {
+    if (d.band) { const [a, b] = toM(d.band[0], d.band[1]); draw(); return pickBox(a, b, x, y); }
+    if (!d.moved) return pickAt(x, y, d.alt);
+  }
+  draw();
+});
+window.addEventListener("resize", changed);
+
+function svg(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  (parent || ov).append(e);
+  return e;
+}
+function draw() {
+  ov.replaceChildren();
+  if (tab === "devices") drawDevices(); else if (tab === "clean") drawClean();
+  if (drag && drag.band) {
+    const [a, b, c, d] = drag.band;
+    svg("rect", {x: Math.min(a, c), y: Math.min(b, d), width: Math.abs(c - a), height: Math.abs(d - b),
+                 fill: "rgba(47,111,222,.08)", stroke: "#2f6fde", "stroke-dasharray": "4 3"});
+  }
+}
+
+// ------------------------------------------------------------------ devices tab
+let D = null;                     // state from the server
+let sel = null;                   // selected device id
+let selRoom = null;               // [plan, id]
+let adding = null;                // device type to add on click
+let last = null;                  // last action entry (for reasons)
+let chips = new Set();            // chosen reasons, by their stored (Turkish) text
+let showDeleted = true, showOrig = true;
+
+async function loadDevices() {
+  try { D = await api(`/api/outputs/${encodeURIComponent(output)}/devices/state`); }
+  catch (e) { D = null; side(el("div", {class: "card"}, T("Bu çıktıda yerleşim yok. Önce ", "This output has no placement. First place it on the "),
+                                el("a", {href: "/draw"}, T("Çizim", "Placement")), T(" sayfasında yerleştirin.", " page."))); return; }
+  learnReasons(D.reasons);
+  const r = D.regions;
+  if (!view.ready && r.length) { fit([Math.min(...r.map(b => b[0])), Math.min(...r.map(b => b[1])), Math.max(...r.map(b => b[2])), Math.max(...r.map(b => b[3]))]); view.ready = true; }
+  sidebarDevices(); draw();
+}
+
+function symbol(g, type, X, Y, k) {
+  const c = COL[type] || "#333";
+  const r = 7 * k;
+  if (type === "light_ceiling") {
+    svg("circle", {cx: X, cy: Y, r, fill: "#fff", stroke: c, "stroke-width": 2.5}, g);
+    svg("path", {d: `M${X - r * .7} ${Y - r * .7}L${X + r * .7} ${Y + r * .7}M${X - r * .7} ${Y + r * .7}L${X + r * .7} ${Y - r * .7}`, stroke: c, "stroke-width": 2}, g);
+  } else if (type === "socket") svg("circle", {cx: X, cy: Y, r, fill: c}, g);
+  else if (type === "socket_wet") svg("rect", {x: X - r, y: Y - r, width: 2 * r, height: 2 * r, fill: c}, g);
+  else if (type === "panel") svg("rect", {x: X - r * .6, y: Y - r * 1.4, width: r * 1.2, height: r * 2.8, fill: "#fff", stroke: c, "stroke-width": 2.5}, g);
+  else if (type === "light_emergency") { svg("circle", {cx: X, cy: Y, r, fill: "#fff", stroke: c, "stroke-width": 2.5}, g); svg("circle", {cx: X, cy: Y, r: r * .4, fill: c}, g); }
+  else svg("polygon", {points: `${X},${Y - r - 2} ${X - r},${Y + r} ${X + r},${Y + r}`, fill: c}, g);
+}
+
+function areaRatio() {         // the architect's convention: median of ours / his (ADR-030)
+  const q = D.rooms.filter(r => r.stamp_m2).map(r => r.area_m2 / r.stamp_m2).sort((a, b) => a - b);
+  return q.length ? q[Math.floor(q.length / 2)] : 1;
+}
+function stampNote(r, ratio) {
+  if (r.stamps > 1) return {text: T(` · ${r.stamps} alan yazısı: odalar birleşmiş`, ` · ${r.stamps} area labels: rooms merged`), bad: true};
+  if (!r.stamp_m2) return {text: "", bad: false};
+  const d = r.area_m2 / (r.stamp_m2 * ratio) - 1;
+  return {text: T(` / mimar ${r.stamp_m2}`, ` / architect ${r.stamp_m2}`), bad: Math.abs(d) > 0.10};
+}
+function drawDevices() {
+  if (!D) return;
+  const ratio = areaRatio();
+  for (const r of D.rooms) {
+    const [X, Y] = toPx(r.centre[0], r.centre[1]);
+    const on = selRoom && selRoom[0] === r.plan && selRoom[1] === r.id;
+    if (on) { const [a, b] = toPx(r.bbox[0], r.bbox[3]), [c, d] = toPx(r.bbox[2], r.bbox[1]);
+      svg("rect", {x: a, y: b, width: c - a, height: d - b, fill: "rgba(47,111,222,.06)", stroke: "#2f6fde", "stroke-dasharray": "5 4"}); }
+    const note = stampNote(r, ratio);
+    const t = svg("text", {x: X, y: Y, "text-anchor": "middle", "font-size": 11, fill: r.reviewed ? "#1f9d55" : note.bad ? "#d64545" : "#8a8f9c"});
+    t.textContent = `${r.reviewed ? "✓ " : ""}${ROOM_NAMES[r.type] || r.type || "?"}${r.type_guessed ? "?" : ""} ${(r.area_m2 || 0).toFixed(1)} m²${note.text}`;
+  }
+  for (const d of D.devices) {
+    if (d.status === "deleted" && (!showDeleted || d.origin === "engineer")) continue;
+    let x = d.x, y = d.y;
+    if (drag && drag.dev === d.id && drag.at) [x, y] = drag.at;
+    const [X, Y] = toPx(x, y);
+    if (showOrig && d.status === "changed") {
+      const [ox, oy] = toPx(d.orig.x, d.orig.y);
+      svg("line", {x1: ox, y1: oy, x2: X, y2: Y, stroke: "#999", "stroke-dasharray": "3 3"});
+      const g0 = svg("g", {opacity: .25}); symbol(g0, d.orig.type, ox, oy, 1);
+    }
+    const g = svg("g", {"data-dev": d.id, style: "cursor:move", opacity: d.status === "deleted" ? .3 : 1});
+    const ring = {accepted: "#1f9d55", changed: "#2f6fde", added: "#111"}[d.status];
+    if (ring) svg("circle", {cx: X, cy: Y, r: 11, fill: "none", stroke: ring, "stroke-width": 1.5}, g);
+    if (d.id === sel) svg("circle", {cx: X, cy: Y, r: 14, fill: "rgba(47,111,222,.15)", stroke: "#2f6fde", "stroke-width": 2}, g);
+    svg("circle", {cx: X, cy: Y, r: 12, fill: "transparent"}, g);         // easier to grab
+    symbol(g, d.type, X, Y, 1);
+    if (d.status === "deleted") svg("path", {d: `M${X - 9} ${Y - 9}L${X + 9} ${Y + 9}M${X - 9} ${Y + 9}L${X + 9} ${Y - 9}`, stroke: "#d64545", "stroke-width": 2}, g);
+  }
+}
+
+function roomAt(x, y) {
+  const inside = D.rooms.filter(r => r.bbox[0] <= x && x <= r.bbox[2] && r.bbox[1] <= y && y <= r.bbox[3]);
+  if (!inside.length) return null;
+  inside.sort((a, b) => (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) - (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1]));
+  return [inside[0].plan, inside[0].id];
+}
+
+function devClick(id, x, y) {
+  if (!D) return;
+  if (adding) return act({action: "add", type: adding, x, y});
+  sel = id; selRoom = id ? null : roomAt(x, y);
+  sidebarDevices(); draw();
+}
+
+async function act(body) {
+  try {
+    const res = await api(`/api/outputs/${encodeURIComponent(output)}/devices/edit`, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    D = {...D, ...res};
+    if (body.action !== "undo" && body.action !== "reason") { last = res.entry; chips = new Set(); }
+    if (body.action === "add") sel = res.entry.changes[0].key;
+    if (body.action === "undo") last = null;
+    status("");
+  } catch (e) { status(T("Hata: ", "Error: ") + e.message); }
+  sidebarDevices(); draw();
+}
+
+function sidebarDevices() {
+  if (!D) return;
+  const t = D.tally;
+  const parts = [card(el("div", {class: "kv"},
+      el("b", {}, T(`${D.rooms_reviewed} / ${D.rooms_total} oda tamam`, `${D.rooms_reviewed} / ${D.rooms_total} rooms done`)), el("br"),
+      Object.entries(STATUS_NAMES).filter(([k]) => t[k]).map(([k, v]) => `${v} ${t[k]}`).join(" · ")),
+    el("div", {class: "hint"}, T("Sürükle: taşı · tıkla: seç · boş yere tıkla: oda · Del: sil · Ctrl+Z: geri al · Esc: bırak · tekerlek: yakınlaştır",
+                                 "Drag: move · click: select · click empty space: room · Del: delete · Ctrl+Z: undo · Esc: release · wheel: zoom")),
+    el("div", {class: "row", style: "margin-top:6px"},
+      checkbox(T("silinenleri göster", "show deleted"), showDeleted, v => { showDeleted = v; draw(); }),
+      checkbox(T("modelin ilk yeri", "model's first position"), showOrig, v => { showOrig = v; draw(); })))];
+  parts.push(card(el("b", {}, T("Ekle", "Add")), el("div", {class: "palette row", style: "margin-top:6px"},
+    D.classes.map(c => el("button", {class: adding === c ? "on" : "", onclick: () => { adding = adding === c ? null : c; box.classList.toggle("adding", !!adding); sidebarDevices(); }}, devName(c)))),
+    el("div", {class: "hint"}, adding ? T(`Planda tıklayın: ${devName(adding)} eklenir (duvar cihazları en yakın duvara oturur). Esc ile bırakın.`,
+                                          `Click on the plan to add a ${devName(adding)} (wall devices snap to the nearest wall). Esc to stop.`) : "")));
+  const d = sel && D.devices.find(v => v.id === sel);
+  if (d) {
+    const tsel = el("select", {onchange: e => act({action: "retype", id: d.id, type: e.target.value})},
+      D.classes.map(c => { const o = el("option", {value: c}, devName(c)); o.selected = c === d.type; return o; }));
+    parts.push(card(el("b", {}, `${devName(d.type)} · ${STATUS_NAMES[d.status]}`),
+      el("div", {class: "kv muted"}, d.origin === "engineer" ? T("mühendis ekledi", "added by the engineer")
+        : T("model koydu", "placed by the model") + (d.status === "changed" ? T(`; ilk tipi ${devName(d.orig.type)}`, `; first type ${devName(d.orig.type)}`) : "")),
+      el("div", {class: "row", style: "margin-top:6px"}, T("Tip", "Type"), tsel,
+        d.status !== "deleted" ? el("button", {onclick: () => act({action: "delete", id: d.id})}, T("Sil", "Delete")) : null)));
+  }
+  const r = selRoom && D.rooms.find(v => v.plan === selRoom[0] && v.id === selRoom[1]);
+  if (r) {
+    const inRoom = D.devices.filter(v => v.plan === r.plan && v.room === r.id && v.status !== "deleted");
+    const counts = {};
+    for (const v of inRoom) counts[v.type] = (counts[v.type] || 0) + 1;
+    const ratio = areaRatio();
+    parts.push(card(el("b", {}, `${ROOM_NAMES[r.type] || r.type || T("adsız oda", "unnamed room")}${r.type_guessed ? T(" (tahmin)", " (guessed)") : ""} · ${Math.round(r.area_m2 || 0)} m²`),
+      el("div", {class: "kv muted"}, (r.names || []).join(", ")),
+      r.stamp_m2 || r.stamps > 1 ? el("div", {class: "kv " + (stampNote(r, ratio).bad ? "warn" : "good")},
+        r.stamps > 1 ? T(`Bu odada ${r.stamps} alan yazısı var: aradaki duvar ya da kapı okunamamış.`,
+                         `This room has ${r.stamps} area labels: the wall or door between them was not read.`)
+          : T(`Okunan ${r.area_m2} m², mimarın yazdığı ${r.stamp_m2} m²`, `Read ${r.area_m2} m², the architect wrote ${r.stamp_m2} m²`) +
+            (Math.abs(ratio - 1) > 0.05 ? T(` (bu projede mimar alanları ortalama %${Math.round((1 / ratio - 1) * 100)} farklı yazmış)`,
+                                           ` (in this project the architect's areas differ by ${Math.round((1 / ratio - 1) * 100)}% on average)`) : "")) : null,
+      el("div", {class: "kv"}, Object.entries(counts).map(([k, n]) => `${devName(k)} ${n}`).join(" · ") || T("cihaz yok", "no devices")),
+      el("div", {class: "row", style: "margin-top:6px"},
+        el("button", {class: r.reviewed ? "" : "primary", onclick: () => act({action: "room", plan: r.plan, room: r.id, reviewed: !r.reviewed})},
+          r.reviewed ? T("Oda tamam işaretini kaldır", "Remove the room-done mark") : T("Oda tamam ✓", "Room done ✓"))),
+      el("div", {class: "hint"}, T("“Oda tamam”: bu odada dokunmadığınız cihazları kabul ettiğiniz anlamına gelir.",
+                                   "“Room done” means you accept the devices you did not touch in this room."))));
+  }
+  if (last) parts.push(reasonCard(T(`Son işlem #${last.seq}: `, `Last action #${last.seq}: `) + (ACTION_NAMES[last.action] || last.action), D.reasons,
+    (reasons, note) => act({action: "reason", target: last.seq, reasons, note})));
+  side(...parts);
+}
+
+function reasonCard(title, list, save, saveLabel) {
+  const note = el("textarea", {placeholder: T("Açıklama (isteğe bağlı): neden?", "Note (optional): why?")});
+  return card(el("b", {}, title), el("div", {class: "hint"}, T("Neden? Seçip kaydedin.", "Why? Pick and save.")),
+    el("div", {class: "chips"}, (list || []).map(r => el("span", {class: "chip" + (chips.has(r.tr) ? " on" : ""),
+      onclick: e => { chips.has(r.tr) ? chips.delete(r.tr) : chips.add(r.tr); e.target.classList.toggle("on"); }}, L(r)))),
+    note, saveLabel === null ? null : el("div", {class: "row", style: "margin-top:6px"},
+      el("button", {class: "primary", onclick: () => save([...chips], note.value)}, saveLabel || T("Gerekçeyi kaydet", "Save the reason"))));
+}
+
+// ------------------------------------------------------------------ cleanup tab
+let C = null, pick = null, pickArgs = null;
+async function loadClean() {
+  C = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/state`);
+  learnReasons(C.reasons);
+  if (!view.ready && C.bbox) { fit(C.bbox); view.ready = true; }
+  sidebarClean(); draw();
+}
+async function pickAt(x, y, leaf) {
+  pickArgs = `x=${x}&y=${y}&tol=${8 / view.s}&leaf=${leaf ? "true" : "false"}`;
+  pick = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/pick?${pickArgs}`);
+  sidebarClean(); draw();
+}
+async function pickBox(x0, y0, x1, y1) {
+  pickArgs = `x=${x0}&y=${y0}&x1=${x1}&y1=${y1}`;
+  pick = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/pick?${pickArgs}`);
+  sidebarClean(); draw();
+}
+function drawClean() {
+  if (!pick || !pick.segs) return;
+  const d = pick.segs.map(([a, b, c, e]) => { const [x1, y1] = toPx(a, b), [x2, y2] = toPx(c, e); return `M${x1} ${y1}L${x2} ${y2}`; }).join("");
+  svg("path", {d, stroke: "rgba(47,111,222,.9)", "stroke-width": 3, fill: "none"});
+}
+async function mark(keep) {
+  if (!pick || !pick.count) return;
+  if (!pick.items) { status(T("Seçim çok büyük (2000+ nesne); daha küçük bir kutu seçin.", "Selection too large (2000+ items); draw a smaller box.")); return; }
+  try {
+    C = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/edit`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({items: pick.items, keep, reasons: [...chips], note: document.getElementById("cnote")?.value || ""})});
+    chips = new Set();
+    pick = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/pick?${pickArgs}`);
+    status(""); fetchImg();
+  } catch (e) { status(T("Hata: ", "Error: ") + e.message); }
+  sidebarClean(); draw();
+}
+async function undoClean() {
+  try {
+    C = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/edit`, {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: "undo"})});
+    if (pickArgs) pick = await api(`/api/outputs/${encodeURIComponent(output)}/cleanup/pick?${pickArgs}`);
+    fetchImg();
+  } catch (e) { status(T("Hata: ", "Error: ") + e.message); }
+  sidebarClean(); draw();
+}
+function sidebarClean() {
+  if (!C) return;
+  const parts = [card(el("div", {class: "legend"},
+      el("span", {}, el("i", {style: "background:#282828"}), T("kaldı", "kept")), el("span", {}, el("i", {style: "background:rgb(240,196,196)"}), T("silindi", "deleted")),
+      el("span", {}, el("i", {style: "background:rgb(0,160,70)"}), T("mühendis: kalmalı", "engineer: keep")),
+      el("span", {}, el("i", {style: "background:rgb(240,120,0)"}), T("mühendis: silinmeli", "engineer: delete"))),
+    el("div", {class: "kv", style: "margin-top:4px"}, T(`Düzeltme: ${C.say_keep} nesne kalmalı, ${C.say_delete} nesne silinmeli`,
+                                                        `Corrections: keep ${C.say_keep} items, delete ${C.say_delete} items`)),
+    el("div", {class: "hint"}, T("Tıkla: nesneyi seç (blok bütün) · Alt+tıkla: tek parça · Shift+sürükle: kutu içindekiler · Ctrl+Z: geri al",
+                                 "Click: select an item (whole block) · Alt+click: single part · Shift+drag: everything in a box · Ctrl+Z: undo")),
+    C.has_why ? null : el("div", {class: "hint warn"}, T("Bu çıktı eski: hangi aracın sildiği kayıtlı değil, gerekçe katman tipinden söyleniyor. Yeniden temizlenirse araç adı da görünür.",
+                                                         "This output is older: which tool deleted what was not recorded, so the reason comes from the layer type. Clean it again to see tool names.")))];
+  if (pick && pick.count) {
+    const said = {keep: T("mühendis: kalmalı", "engineer: keep"), delete: T("mühendis: silinmeli", "engineer: delete"), mixed: T("mühendis: karışık", "engineer: mixed")}[pick.said];
+    parts.push(card(el("b", {}, T(`${pick.count} nesne seçili`, `${pick.count} items selected`)),
+      el("div", {class: "kv"}, T(`Sistem: ${pick.kept} kaldı, ${pick.deleted} silindi`, `System: ${pick.kept} kept, ${pick.deleted} deleted`) +
+        (said ? ` · ${said} (${pick.said_count})` : "")),
+      el("div", {style: "margin-top:6px"}, el("b", {}, T("Sistemin gerekçesi", "The system's reason")),
+        el("ul", {style: "margin:4px 0 0 18px;padding:0"}, pick.reasons.map(r => el("li", {class: "kv"}, `${L(r.text)}${pick.reasons.length > 1 || r.count > 1 ? ` (${r.count})` : ""}`)))),
+      el("table", {class: "small", style: "margin-top:6px"}, el("tbody", {}, pick.layers.map(l => el("tr", {}, el("td", {}, l.name), el("td", {class: "muted"}, L(l.type)), el("td", {}, l.count))))),
+      el("div", {class: "hint", style: "margin-top:4px"}, [pick.types.join(", "), pick.blocks.length ? T("blok: ", "block: ") + pick.blocks.join(", ") : "",
+                                                            pick.texts.length ? T("yazı: ", "text: ") + pick.texts.join(" | ") : ""].filter(Boolean).join(" · "))));
+    const rc = reasonCard(T("Sizin kararınız", "Your decision"), C.reasons, null, null);
+    rc.querySelector("textarea").id = "cnote";
+    rc.append(el("div", {class: "row", style: "margin-top:6px"},
+      el("button", {class: "primary", style: "background:#1f9d55;border-color:#1f9d55", onclick: () => mark(true)}, T("Kalmalı", "Keep")),
+      el("button", {class: "primary", style: "background:#d98e04;border-color:#d98e04", onclick: () => mark(false)}, T("Silinmeli", "Delete")),
+      pick.said ? el("button", {onclick: () => mark(null)}, T("Sistem kararına dön", "Back to the system's decision")) : null));
+    parts.push(rc);
+  }
+  side(...parts);
+}
+
+// ------------------------------------------------------------------ reasons tab (Gerekçeler)
+async function loadLog() {
+  const rows = await api(`/api/outputs/${encodeURIComponent(output)}/edits/log`);
+  if (!Object.keys(REASON_LABELS).length) {
+    const [dev, cl] = await Promise.all([api(`/api/outputs/${encodeURIComponent(output)}/devices/state`).catch(() => null),
+                                         api(`/api/outputs/${encodeURIComponent(output)}/cleanup/state`).catch(() => null)]);
+    if (dev) { learnReasons(dev.reasons); D = D || dev; }
+    if (cl) learnReasons(cl.reasons);
+  }
+  const dev = rows.filter(r => r.kind === "devices"), cl = rows.filter(r => r.kind === "cleanup");
+  const where = r => r.kind === "cleanup" ? r.bbox : (() => { const c = (r.changes || [])[0]; const v = c && (c.after || c.before);
+    return v && v.x != null ? [v.x - 2, v.y - 2, v.x + 2, v.y + 2] : v && v.bbox ? v.bbox : null; })();
+  const go = r => { const b = where(r); if (!b) return; switchTab(r.kind === "cleanup" ? "clean" : "devices");
+    const pad = Math.max(1, (b[2] - b[0]) * .3); fit([b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad]); };
+  const what = r => { const c = (r.changes || [])[0] || {}; const v = c.after || c.before || {};
+    return `${ACTION_NAMES[r.action] || r.action}${v.type ? ": " + devName(v.type) : ""}${r.action === "retype" && c.before ? T(` (önce ${devName(c.before.type)})`, ` (was ${devName(c.before.type)})`) : ""}`; };
+  const table = (head, list, cells) => list.length ? el("table", {class: "small"}, el("thead", {}, el("tr", {}, head.map(h => el("th", {}, h)))),
+    el("tbody", {}, list.map(r => el("tr", {class: "go", onclick: () => go(r)}, cells(r).map(c => el("td", {}, c)))))) : el("div", {class: "muted"}, T("Henüz yok.", "None yet."));
+  document.getElementById("logbox").replaceChildren(
+    el("h2", {}, T(`Cihaz düzeltmeleri (${dev.length})`, `Device corrections (${dev.length})`)),
+    table(["#", T("zaman", "time"), T("kim", "who"), T("işlem", "action"), T("gerekçe", "reason"), T("açıklama", "note")], dev,
+          r => [r.seq, r.t, r.user || "", what(r), (r.reasons || []).map(reasonText).join(", "), r.note || ""]),
+    el("h2", {}, T(`Temizlik düzeltmeleri (${cl.length})`, `Cleanup corrections (${cl.length})`)),
+    table(["#", T("zaman", "time"), T("kim", "who"), T("karar", "decision"), T("nesne", "items"), T("katman", "layer"),
+           T("sistemin gerekçesi", "the system's reason"), T("mühendisin gerekçesi", "the engineer's reason"), T("açıklama", "note")], cl,
+      r => [r.seq, r.t, r.user || "", r.keep === true ? T("kalmalı", "keep") : r.keep === false ? T("silinmeli", "delete") : T("sisteme dön", "back to the system"), r.count,
+            (r.layers || []).slice(0, 3).join(", "), (r.system_reason || []).map(L).join("; "), (r.reasons || []).map(reasonText).join(", "), r.note || ""]),
+    el("div", {class: "hint", style: "margin-top:8px"}, T("Satıra tıklayınca planda o yere gider.", "Click a row to go to that place on the plan.")));
+}
+
+// ------------------------------------------------------------------ page
+function card(...c) { return el("div", {class: "card"}, ...c); }
+function side(...parts) { document.getElementById("side").replaceChildren(...parts.filter(Boolean)); }
+function status(t) { document.getElementById("status").textContent = t; }
+function checkbox(label, on, change) {
+  const b = el("input", {type: "checkbox", onchange: e => change(e.target.checked)}); b.checked = on;
+  return el("label", {class: "hint"}, b, " ", label);
+}
+function switchTab(t) {
+  tab = t;
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+  const log = t === "log";
+  document.querySelector(".work").style.display = log ? "none" : "";
+  document.getElementById("logbox").style.display = log ? "" : "none";
+  document.getElementById("export").style.display = log ? "none" : "";
+  adding = null; box.classList.remove("adding");
+  if (log) return loadLog();
+  (t === "devices" ? loadDevices() : loadClean()).then(() => changed());
+}
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+document.getElementById("export").addEventListener("click", async () => {
+  try {
+    const job = await api(`/api/outputs/${encodeURIComponent(output)}/export/${tab === "clean" ? "clean" : "devices"}`, {method: "POST"});
+    status("");
+    document.getElementById("status").replaceChildren(T("Yazılıyor: ", "Writing: "), el("a", {href: `/debug#${job.id}`}, T("iş", "job")),
+      T(" · bitince ", " · when done "),
+      el("a", {href: `/api/outputs/${encodeURIComponent(output)}/${tab === "clean" ? "clean_corrected.dwg" : "placed_corrected.dwg"}`}, T("indir", "download")));
+  } catch (e) { status(T("Hata: ", "Error: ") + e.message); }
+});
+document.addEventListener("keydown", e => {
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName)) return;
+  if (e.key === "Escape") { adding = null; sel = null; selRoom = null; pick = null; box.classList.remove("adding");
+    tab === "devices" ? sidebarDevices() : sidebarClean(); draw(); }
+  if ((e.key === "Delete" || e.key === "Backspace") && tab === "devices" && sel) act({action: "delete", id: sel});
+  if (e.key.toLowerCase() === "z" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); tab === "devices" ? act({action: "undo"}) : undoClean(); }
+});
+
+async function init() {
+  const outs = await api("/api/outputs");
+  const chooser = document.getElementById("output");
+  const usable = outs.filter(o => o.files.includes("clean.dxf"));
+  chooser.replaceChildren(...usable.map(o => {
+    const src = (o.source || o.name).split(/[\\/]/).pop();
+    const op = el("option", {value: o.name}, `${src} · ${o.name.slice(-15)}${o.placement ? T(" · yerleşim var", " · has placement") : ""}`);
+    op.selected = o.name === output; return op; }));
+  if (!output && usable.length) output = (usable.find(o => o.placement) || usable[0]).name;
+  chooser.value = output;
+  chooser.addEventListener("change", () => { output = chooser.value; history.replaceState(null, "", `/edit?output=${encodeURIComponent(output)}`);
+    view.ready = false; sel_reset(); switchTab(tab); });
+  if (q.get("tab")) tab = q.get("tab");
+  switchTab(tab);
+}
+function sel_reset() { D = null; C = null; pick = null; last = null; sel = null; selRoom = null; bg.removeAttribute("src"); view.img = null; }
+init();
+</script>
+</body>
+</html>

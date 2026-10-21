@@ -1,0 +1,13 @@
+ezdxf>=1.4
+numpy>=1.26
+scipy>=1.11
+shapely>=2.0
+fastapi>=0.110
+uvicorn>=0.29
+lightgbm>=4.3
+scikit-learn>=1.4
+pyyaml>=6.0
+pytest>=8
+pillow>=10.0
+python-multipart>=0.0.9
+httpx>=0.27

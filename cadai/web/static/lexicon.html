@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Lexicon">cad-ai · Sözlük</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<style>
+  .sym { display: grid; grid-template-columns: 240px 1fr; gap: 16px; align-items: start; }
+  .sym textarea { width: 100%; min-height: 54px; margin-top: 8px; font: inherit; padding: 6px;
+                  border: 1px solid var(--line); border-radius: 6px; box-sizing: border-box; resize: vertical; }
+  .sym img { width: 240px; height: 240px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+  @media (max-width: 600px) { .sym { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title" data-en="Lexicon">Sözlük</h1>
+  <p class="muted" data-en-html="Things the data cannot name by itself: choosing a row's type once labels every example of it in the
+    archive. Drawn in red is one example of the row on a plan. Pre-selected types are LLM proposals; they are not used in training
+    until <b>Confirm</b> is pressed. If the list has no exact match or there is more to say (where it is used, what not to confuse
+    it with), write it in the <b>engineer's comment</b> box.">Verinin kendisinin adlandıramadığı şeyler: her satırın tipini bir kez seçmek, arşivdeki bütün örneklerini etiketler.
+    Kırmızı çizilen, o satırın plandaki bir örneği. Önceden seçili gelenler LLM önerisidir; <b>Onayla</b>'ya basılana kadar eğitimde kullanılmaz.
+    Listede tam karşılığı yoksa ya da ek bilgi varsa (nerede kullanılır, neyle karıştırılmamalı) <b>mühendis yorumu</b> kutusuna yazın.</p>
+  <div class="row" style="margin-bottom:12px">
+    <button id="refresh" data-en="Refresh the catalogue">Kataloğu yenile</button>
+    <label><input type="checkbox" id="onlyopen" onchange="draw()"> <span data-en="only unconfirmed">yalnızca onaylanmayanlar</span></label>
+    <span class="muted" id="note"></span>
+  </div>
+  <div id="list" class="muted" data-en="Loading…">Yükleniyor…</div>
+</main>
+<script>
+const kind = location.pathname.split("/").pop();
+header(`/lexicon/${kind}`);
+const note = document.getElementById("note");
+document.getElementById("refresh").onclick = () => runJob(kind).then(() =>
+  note.textContent = T("Katalog yenileniyor (Debug'da izleyin)…", "Refreshing the catalogue (follow it on Debug)…"));
+let DATA = null;
+
+const post = (path, body) => api(path, {method: "POST", headers: {"Content-Type": "application/json"},
+                                         body: JSON.stringify(body)});
+
+async function saveNote(key, text) {
+  if ((DATA.notes[key]?.text || "") === text.trim()) return;
+  const entry = await post(`/api/lexicon/${kind}/note`, {key, text});
+  if (entry.text) DATA.notes[key] = entry; else delete DATA.notes[key];
+}
+
+async function save(key, type, text) {
+  await post(`/api/lexicon/${kind}/type`, {key, type});
+  DATA.types[key] = type;
+  await saveNote(key, text);
+  draw();
+}
+
+const names = list => list.map(([n, k]) => `${n} (${k})`).join(", ");
+
+function facts(c) {
+  if (kind === "symbols") {
+    return [T(`${c.files} projede, ${c.instances} kullanım · boyut ${c.size_m} m · katman: ${Object.keys(c.layers).join(", ")}`,
+              `${c.files} projects, ${c.instances} uses · size ${c.size_m} m · layers: ${Object.keys(c.layers).join(", ")}`),
+            c.hints && c.hints.length ? T("Yanındaki yazılar: ", "Nearby text: ") + c.hints.map(([t, n]) => `"${t}" (${n})`).join(", ") : null];
+  }
+  if (kind === "furniture_shapes") {
+    return [T(`${c.projects} projede, ${c.instances} örnek · ${c.short_m} × ${c.long_m} m · ${c.member_count} farklı çizim şekli`,
+              `${c.projects} projects, ${c.instances} examples · ${c.short_m} × ${c.long_m} m · ${c.member_count} different drawn shapes`),
+            c.sig.startsWith("~") ? T("Dağınık çizgilerle çizilmiş (blok değil)", "Drawn with loose lines (not a block)") : null,
+            c.names.length ? T("Blok adları: ", "Block names: ") + names(c.names) : null,
+            T("Seçilen ad bu şekle benzeyen bütün örneklere (bütün projelerde) uygulanır.", "The chosen name applies to every similar shape (in every project).")];
+  }
+  return [T(`${c.projects} projede, ${c.instances} kullanım · ${c.short_m} × ${c.long_m} m`, `${c.projects} projects, ${c.instances} uses · ${c.short_m} × ${c.long_m} m`),
+          c.deleted_share == null ? null : T(`Mühendis çizgilerinin %${Math.round(c.deleted_share * 100)}'ini silmiş`,
+                                             `The engineer deleted ${Math.round(c.deleted_share * 100)}% of its lines`),
+          T("Blok adları: ", "Block names: ") + names(c.names)];
+}
+
+function card(c) {
+  const key = c[DATA.key];
+  const confirmed = DATA.types[key];
+  const prop = DATA.proposals[key];
+  const select = el("select", {}, Object.entries(DATA.type_names).map(([k, t]) => el("option", {value: k}, L(t))));
+  select.value = confirmed || (prop && prop.type) || "none";
+  const saved = DATA.notes[key];
+  const box = el("textarea", {placeholder: T("Mühendis yorumu: bu nedir, nerede kullanılır, neyle karıştırılmamalı…",
+                                             "Engineer's comment: what is this, where is it used, what not to confuse it with…")});
+  box.value = saved ? saved.text : "";
+  const savedNote = el("span", {class: "sub"}, saved ? T(`yorum kaydedildi · ${saved.at.replace("T", " ")}`, `comment saved · ${saved.at.replace("T", " ")}`) : "");
+  return el("div", {class: "card sym", style: "margin-bottom:10px"},
+    el("img", {src: `/api/lexicon/${kind}/${c.id}.png`, loading: "lazy"}),
+    el("div", {},
+      el("div", {class: "row"}, el("b", {}, key),
+        confirmed ? pill(T("onaylı: ", "confirmed: ") + L(DATA.type_names[confirmed]), "ok") : pill(T("onay bekliyor", "awaiting confirmation"), "warn")),
+      ...facts(c).filter(Boolean).map(t => el("div", {class: "sub"}, t)),
+      prop ? el("div", {class: "sub"}, T("Öneri: ", "Proposal: ") + `${L(DATA.type_names[prop.type])} · ` +
+                                       T("güven ", "confidence ") + `${L(prop.confidence)} · ${L(prop.why)}`) : null,
+      el("div", {class: "row", style: "margin-top:8px"}, select,
+        el("button", {class: confirmed ? "" : "primary", onclick: () => save(key, select.value, box.value)}, confirmed ? T("Değiştir", "Change") : T("Onayla", "Confirm"))),
+      box,
+      el("div", {class: "row"},
+        el("button", {onclick: async () => { await saveNote(key, box.value); draw(); }}, T("Yorumu kaydet", "Save comment")), savedNote)));
+}
+
+function draw() {
+  const only = document.getElementById("onlyopen").checked;
+  const rows = DATA.catalog.filter(c => !(only && DATA.types[c[DATA.key]]));
+  const done = DATA.catalog.filter(c => DATA.types[c[DATA.key]]).length;
+  note.textContent = T(`${done} / ${DATA.catalog.length} onaylı`, `${done} / ${DATA.catalog.length} confirmed`);
+  document.getElementById("list").replaceChildren(...(rows.length ? rows.map(card)
+    : [T("Katalog boş; önce 'Kataloğu yenile'.", "The catalogue is empty; first 'Refresh the catalogue'.")]));
+}
+
+api(`/api/lexicon/${kind}`).then(d => {
+  DATA = d;
+  document.getElementById("title").textContent = L(d.title);
+  document.title = `cad-ai · ${L(d.title)}`;
+  draw();
+});
+</script>
+</body>
+</html>

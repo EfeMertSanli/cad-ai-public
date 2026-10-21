@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-en="cad-ai · Clean">cad-ai · Temizle</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/common.js"></script>
+<style>
+  .layers td { vertical-align: middle; }
+  .layers img { width: 180px; border: 1px solid var(--line); border-radius: 4px; background: #fff; display: block; }
+  .layers select.changed { outline: 2px solid #e08a00; }
+</style>
+</head>
+<body>
+<main>
+  <h1 data-en="Clean a new drawing">Yeni çizimi temizle</h1>
+  <div class="card">
+    <div class="row">
+      <input type="file" id="file" accept=".dwg,.dxf" hidden
+             onchange="document.getElementById('filename').textContent = this.files[0] ? this.files[0].name : T('Dosya seçilmedi', 'No file chosen')">
+      <button onclick="document.getElementById('file').click()" data-en="Choose a drawing…">Çizim seçin…</button>
+      <span class="muted" id="filename" data-en="No file chosen">Dosya seçilmedi</span>
+      <select id="mode">
+        <option value="agent" data-en="Tools + Claude (recommended)">Araçlar + Claude (önerilen)</option>
+        <option value="tools" data-en="Tools only (no Claude)">Yalnız araçlar (Claude'suz)</option>
+        <option value="auto" data-en="Layer method (previous)">Katman yöntemi (önceki)</option>
+      </select>
+      <label><input type="checkbox" id="keepfurn"> <span data-en="keep furniture and sanitary ware in the base">mobilya ve vitrifiyeyi altlıkta bırak</span></label>
+      <button class="primary" onclick="upload()" data-en="Upload and clean">Yükle ve temizle</button>
+      <span class="muted" id="note"></span>
+    </div>
+    <div class="sub" data-en-html="<b>Tools + Claude:</b> the sheet is split into drawing regions and Claude picks which are floor plans
+      (sections, elevations, site and roof plans are removed). Inside the plans fixed tools find what to delete: layers to switch
+      off, text and dimensions, furniture, door swings, hatching, dashed lines, and a model on ambiguous layers. Claude checks
+      the result from a picture and, if needed, switches a tool off or corrects a layer type. Two Claude calls per drawing (on the subscription)."><b>Araçlar + Claude:</b> pafta çizim bölgelerine ayrılır, Claude hangilerinin kat planı olduğunu seçer
+      (kesit, görünüş, vaziyet, çatı silinir). Planların içinde sabit araçlar silinecekleri bulur: kapatılacak katmanlar,
+      yazı ve ölçü, mobilya, kapı yayları, tarama, kesikli çizgiler, belirsiz katmanlarda model. Claude sonucu resimden kontrol
+      edip gerekirse bir aracı kapatır ya da katman tipini düzeltir. Çizim başına iki Claude çağrısı (abonelikten).</div>
+    <div class="sub" data-en-html="Previous method: the architect's drawing is not edited; layers are chosen the way the engineer does
+      (walls, columns, windows, stairs stay; hatching, furniture, dimensions are switched off), door swings and hatch lines are
+      removed from the remaining layers, colours white, line weights off, units cm. If the layers do not separate the drawing
+      (everything on one layer) it is cleaned item by item with the model and rules. In the result's <b>Layers</b> table you can
+      correct the types and clean again; corrections are reused in later projects.">Önceki yöntem: mimarın çizimine dokunulmaz: mühendisin yaptığı gibi katmanlar seçilir (duvar, kolon, pencere, merdiven kalır;
+      tarama, mobilya, ölçü kapanır), kalan katmanlardan kapı yayları ve tarama çizgileri ayıklanır, renkler beyaz, çizgi kalınlıkları kapalı, birim cm.
+      Katmanlar çizimi ayırmıyorsa (her şey tek katmanda) model ve kurallarla nesne nesne temizlenir. Sonuçtaki <b>Katmanlar</b> tablosundan
+      tipleri düzeltip yeniden temizleyebilirsiniz; düzeltmeler sonraki projelerde de kullanılır.</div>
+  </div>
+
+  <div class="card" style="margin-top:12px">
+    <div class="row">
+      <b data-en="Try from the archive">Arşivden dene</b>
+      <select id="archive"><option value="" data-en="Choose a project…">Proje seçin…</option></select>
+      <button class="primary" onclick="runArchive('agent')" data-en="Tools + Claude">Araçlar + Claude</button>
+      <button onclick="runArchive('tools')" data-en="Tools only">Yalnız araçlar</button>
+      <button onclick="runArchive('model')" data-en="Layer method">Katman yöntemi</button>
+      <button onclick="runArchive('legacy')" data-en="Clean with the old system">Eski sistemle temizle</button>
+      <span class="muted" id="anote"></span>
+    </div>
+    <div class="sub" data-en="For archive projects the engineer's own cleanup is shown next to the result. Projects marked &quot;test&quot; were never seen by the model in training.">Arşiv projelerinde sonucun yanında mühendisin kendi temizliği de gösterilir. "Test" işaretliler modelin eğitimde hiç görmediği projelerdir.</div>
+  </div>
+
+  <h2 data-en="Results">Sonuçlar</h2>
+  <div id="outputs" class="muted" data-en="No results yet.">Henüz sonuç yok.</div>
+</main>
+<script>
+header("/clean");
+
+function started(target, job) {
+  target.replaceChildren(T("İş başladı: ", "Job started: "), el("a", {href: `/debug#${job.id}`}, T("ilerlemeyi izle", "follow progress")));
+}
+
+async function upload() {
+  const f = document.getElementById("file").files[0];
+  if (!f) return;
+  const note = document.getElementById("note");
+  note.textContent = T("Yükleniyor…", "Uploading…");
+  const body = new FormData();
+  body.append("file", f);
+  body.append("keep_furniture", document.getElementById("keepfurn").checked ? "true" : "false");
+  body.append("mode", document.getElementById("mode").value);
+  try {
+    started(note, await api("/api/clean/upload", {method: "POST", body}));
+  } catch (e) { note.textContent = T("Hata: ", "Error: ") + e.message; }
+}
+
+async function loadArchive() {
+  const projects = await api("/api/projects");
+  const sel = document.getElementById("archive");
+  for (const p of projects) {
+    for (const pair of p.pairs) {
+      if (!pair.raw || !pair.label || !pair.label.ok) continue;
+      const raw = p.files.find(f => f.sha === pair.raw);
+      sel.append(el("option", {value: pair.raw}, `${p.folder}${pair.split === "test" ? "  (test)" : ""} — ${raw ? raw.name : ""}`));
+    }
+  }
+}
+
+async function runArchive(engine) {
+  const sha = document.getElementById("archive").value;
+  const note = document.getElementById("anote");
+  if (!sha) { note.textContent = T("Önce bir proje seçin.", "Choose a project first."); return; }
+  started(note, await api("/api/clean/archive", {method: "POST", headers: {"Content-Type": "application/json"},
+                                                  body: JSON.stringify({sha, engine})}));
+}
+
+let LAYER_LABELS = {};
+let TOOLS = [];
+api("/api/tools").then(d => TOOLS = d);
+const MODE_NAMES = {agent: T("araçlar + Claude", "tools + Claude"), tools: T("yalnız araçlar", "tools only"),
+                    layers: T("katman yöntemi", "layer method"), items: T("nesne yöntemi", "item method")};
+
+function agentPanel(o) {
+  const a = o.agent_record;
+  if (!a) return null;
+  const url = f => `/api/outputs/${o.name}/${f}`;
+  const st = a.stats.tools;
+  const legend = el("div", {class: "row", style: "flex-wrap:wrap; gap:10px; margin:6px 0"}, TOOLS.map(t =>
+    el("span", {}, el("span", {style: `display:inline-block;width:12px;height:12px;background:${t.colour};margin-right:4px`}),
+      `${L(t.label)}: ${st[t.name] ? st[t.name].first : 0}` + (st[t.name] && !st[t.name].enabled ? T(" (kapatıldı)", " (switched off)") : ""))));
+  const calls = a.calls || [];
+  const views = calls.find(c => c.step === "views");
+  const rev = calls.find(c => c.step === "review");
+  return el("details", {open: true},
+    el("summary", {}, T(`Claude adımları (görünüş: ${L(a.views)}, ${calls.length} çağrı, $${a.cost_usd})`,
+                        `Claude steps (views: ${L(a.views)}, ${calls.length} calls, $${a.cost_usd})`)),
+    el("div", {class: "grid", style: "grid-template-columns: repeat(auto-fit, minmax(420px, 1fr))"},
+      o.files.includes("views.png") ? el("div", {}, el("div", {class: "label"}, T("Bölgeler: yeşil kaldı, kırmızı silindi", "Regions: green kept, red deleted")),
+        el("img", {class: "preview", loading: "lazy", src: url("views.png")})) : null,
+      o.files.includes("tools.png") ? el("div", {}, el("div", {class: "label"}, T("Araçların sildikleri (renk = araç, koyu = kalan)", "What the tools deleted (colour = tool, dark = kept)")),
+        legend, el("img", {class: "preview", loading: "lazy", src: url("tools.png")})) : null),
+    a.region_list ? el("table", {}, el("thead", {}, el("tr", {}, [T("Bölge", "Region"), T("Yazılar", "Texts"), T("Karar", "Decision")].map(h => el("th", {}, h)))),
+      el("tbody", {}, a.region_list.map(r => {
+        const why = views && views.regions ? (views.regions.find(x => x.id === r.id) || {}).what : "";
+        return el("tr", {}, el("td", {}, r.n), el("td", {}, r.titles.join(" · ")),
+          el("td", {}, r.kept ? pill(T("kat planı", "floor plan"), "ok") : pill(T("silindi", "deleted")), " ", L(why)));
+      }))) : null,
+    rev && rev.fixes ? el("div", {class: "sub"}, T("Claude kontrolü: ", "Claude's check: "), L(rev.fixes.notes),
+      rev.fixes.disable.length ? T(` · kapatılan araçlar: `, ` · tools switched off: `) + rev.fixes.disable.join(", ") : "",
+      Object.keys(rev.fixes.layer_types).length ? T(` · katman düzeltmeleri: `, ` · layer corrections: `) +
+        Object.entries(rev.fixes.layer_types).map(([k, v]) => `${k} → ${v}`).join(", ") : "") : null);
+}
+api("/api/layer-types").then(d => LAYER_LABELS = d.labels);
+const OPEN = new Set();                         // result cards whose layer table is open survive the refresh
+
+async function relayer(o, selects, mode, all) {
+  const types = {};
+  for (const [row, sel] of selects) if (all || sel.value !== row.type) types[row.layer] = sel.value;
+  const job = await api(`/api/outputs/${o.name}/relayer`, {method: "POST", headers: {"Content-Type": "application/json"},
+                                                           body: JSON.stringify({types, mode})});
+  const n = document.getElementById(`note-${o.name}`);
+  if (n) n.replaceChildren(T(`Yeniden temizleniyor (${Object.keys(types).length} katman tipi kaydedildi). `,
+                             `Cleaning again (${Object.keys(types).length} layer types saved). `),
+                           el("a", {href: `/debug#${job.id}`}, T("ilerlemeyi izle", "follow progress")));
+}
+
+function layerTable(o) {
+  if (!o.layers || !o.layers.length) return null;
+  const url = i => `/api/outputs/${o.name}/layers/${i}.png`;
+  const selects = [];
+  const rows = o.layers.slice(0, 120).map(r => {
+    const sel = el("select", {}, Object.entries(LAYER_LABELS).map(([k, t]) => el("option", {value: k}, L(t))));
+    sel.value = r.type;
+    sel.onchange = () => sel.classList.toggle("changed", sel.value !== r.type);
+    selects.push([r, sel]);
+    return el("tr", {},
+      el("td", {}, o.files.includes("layers") ? el("img", {loading: "lazy", src: url(r.index)}) : null),
+      el("td", {}, el("b", {}, r.layer), el("div", {class: "sub"},
+        T(`${r.items} nesne · planda ${r.plan_m} m · kalan ${r.kept_m} m`, `${r.items} items · ${r.plan_m} m in plan · ${r.kept_m} m kept`))),
+      el("td", {}, sel, " ", r.source === "engineer" ? pill(T("mühendis onaylı", "engineer-confirmed"), "ok") : pill(T("isimden", "from the name"), "warn")));
+  });
+  const all = el("input", {type: "checkbox"});
+  const d = el("details", {}, el("summary", {}, T(`Katmanlar (${o.layers.length}) — tipleri düzeltip yeniden temizleyin`,
+                                                  `Layers (${o.layers.length}) — correct the types and clean again`)),
+    el("div", {class: "row", style: "margin:8px 0"},
+      el("button", {class: "primary", onclick: () => relayer(o, selects, "auto", all.checked)}, T("Bu tiplerle yeniden temizle", "Clean again with these types")),
+      el("button", {onclick: () => relayer(o, selects, "layers", all.checked)}, T("Katman yöntemini zorla", "Force the layer method")),
+      el("button", {onclick: () => relayer(o, selects, "items", all.checked)}, T("Nesne yöntemini zorla", "Force the item method")),
+      el("label", {}, all, T(" değiştirmediklerimi de onaylıyorum", " I also confirm the ones I did not change")),
+      el("span", {class: "muted", id: `note-${o.name}`})),
+    el("table", {class: "layers"}, el("tbody", {}, rows)));
+  d.open = OPEN.has(o.name);
+  d.ontoggle = () => d.open ? OPEN.add(o.name) : OPEN.delete(o.name);
+  return d;
+}
+
+function outputCard(o) {
+  const url = f => `/api/outputs/${o.name}/${f}`;
+  const c = o.counts;
+  const ch = o.check;
+  return el("div", {class: "card", style: "margin-bottom:14px"},
+    el("div", {class: "row"}, el("b", {}, o.source.split(/[\\/]/).pop()), pill(o.model),
+      o.keep_furniture ? pill(T("mobilya bırakıldı", "furniture kept")) : pill(T("sert temizlik", "strict cleanup")),
+      o.mode ? pill(MODE_NAMES[o.mode] || o.mode, ["agent", "tools", "layers"].includes(o.mode) ? "ok" : "warn") : null,
+      o.layer_share ? el("span", {class: "muted"}, T(`bilinen katman payı ${pct(o.layer_share.known_share)}`, `known layer share ${pct(o.layer_share.known_share)}`)) : null,
+      o.engine === "legacy" ? null : pill(T(`silindi ${c.delete}`, `deleted ${c.delete}`)),
+      o.engine === "legacy" ? null : pill(T(`kaldı ${c.keep}`, `kept ${c.keep}`)),
+      o.engine === "legacy" || o.mode !== "items" ? null : pill(T(`soru ${c.question}`, `questions ${c.question}`), c.question ? "warn" : "ok"),
+      el("span", {class: "muted"}, fmtSeconds(o.seconds))),
+    el("div", {class: "row", style: "margin:8px 0"},
+      o.files.includes("clean.dwg") ? el("a", {href: url("clean.dwg")}, T("temiz DWG indir", "download clean DWG")) : null,
+      o.files.includes("clean.dxf") ? el("a", {href: `/edit?tab=clean&output=${encodeURIComponent(o.name)}`}, T("düzelt", "correct")) : null,
+      el("a", {href: url("clean.dxf")}, T("temiz DXF indir", "download clean DXF"))),
+    ch ? el("div", {class: "sub"},
+      T(`Kontrol: ${ch.rooms} oda okundu; ${ch.stamps_in_rooms ?? 0} oda mimarın alan damgasıyla karşılaştırıldı`,
+        `Check: ${ch.rooms} rooms read; ${ch.stamps_in_rooms ?? 0} rooms compared with the architect's area label`) +
+      (ch.within_10 != null ? T(` · ±%10 içinde ${pct(ch.within_10)}, medyan fark ${pct(ch.median_diff, 1)}`,
+                                ` · ${pct(ch.within_10)} within ±10%, median difference ${pct(ch.median_diff, 1)}`) : "") +
+      T(` · ${o.issues} uyarı`, ` · ${o.issues} warnings`)) : null,
+    el("div", {class: "grid", style: "grid-template-columns: repeat(auto-fit, minmax(420px, 1fr))"},
+      o.files.includes("clean.png") ? el("div", {}, el("div", {class: "label"}, T("Bu temizlik", "This cleanup")),
+        el("img", {class: "preview", loading: "lazy", src: url("clean.png")})) : null,
+      o.files.includes("engineer.png") ? el("div", {}, el("div", {class: "label"}, T("Mühendisin temizliği (son çizimden)", "The engineer's cleanup (from the final drawing)")),
+        el("img", {class: "preview", loading: "lazy", src: url("engineer.png")})) : null),
+    agentPanel(o),
+    layerTable(o),
+    !o.files.includes("preview.png") ? null : el("details", {}, el("summary", {},
+      T("Kararlar (pembe silindi, koyu kaldı; turuncu: emin değil ama kaldı, açık turuncu: emin değil ama silindi)",
+        "Decisions (pink deleted, dark kept; orange: unsure but kept, light orange: unsure but deleted)")),
+      el("img", {class: "preview", loading: "lazy", src: url("preview.png")})),
+    o.question_list && o.question_list.length ? el("details", {}, el("summary", {}, T(`Sorular (${o.questions})`, `Questions (${o.questions})`)),
+      el("table", {}, el("thead", {}, el("tr", {}, [T("Katman", "Layer"), T("Nesne", "Items"), T("Uzunluk (m)", "Length (m)"),
+                                                    T("p(sil)", "p(delete)"), "Handle"].map(h => el("th", {}, h)))),
+        el("tbody", {}, o.question_list.map(q => el("tr", {},
+          el("td", {}, q.layer), el("td", {}, q.items), el("td", {}, q.length_m), el("td", {}, q.p_delete), el("td", {}, q.handle)))))) : null,
+    o.issue_list && o.issue_list.length ? el("details", {}, el("summary", {}, T(`Kontrol uyarıları (${o.issues})`, `Check warnings (${o.issues})`)),
+      el("ul", {}, o.issue_list.map(i => el("li", {}, pill(i.code.split(".").pop(), "warn"), " ", L(i.message))))) : null);
+}
+
+async function load() {
+  if (document.querySelector(".layers select.changed")) return;     // the engineer is choosing types
+  const outs = await api("/api/outputs");
+  if (outs.length) document.getElementById("outputs").replaceChildren(...outs.map(outputCard));
+}
+loadArchive();
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>
